@@ -10,7 +10,7 @@
 | 🚨 监控告警 | 🔧 开发中 | 0% |
 | 💾 备份管理 | 🔧 开发中 | 0% |
 
-**当前阶段**: Phase 1 — 项目初始化
+**当前阶段**: Phase 2 — 后端 API 开发（Phase 1 已完成 ✅）
 
 ---
 
@@ -38,7 +38,23 @@
 
 ## 🚀 快速开始
 
-> 开发中，待上线后补充安装说明
+### 开发环境
+```bash
+# 安装依赖
+npm install
+
+# 同时启动前端 (Vite 5173) 和后端 (Express 3100)
+npm run dev
+
+# 分别启动
+npm run dev:server  # 后端
+npm run dev:client  # 前端
+```
+
+### 访问地址
+- 前端开发服务器：http://localhost:5173
+- 后端 API：http://localhost:3100
+- 健康检查：http://localhost:3100/api/health
 
 ## 📖 文档
 
@@ -53,7 +69,7 @@
 
 | 日期 | 变更内容 | 提交 |
 |------|---------|------|
-| 2026-05-18 | 项目初始化，创建计划；备份模块改为可移植性全量备份（含 node_modules/dist）；后端端口改为 3100（避开 memos 3000 端口） | - |
+| 2026-05-18 | Phase 1 完成：项目脚手架搭建，目录结构，Express 后端 + Vite/React 前端，推送到 GitHub | c91637d |
 
 ---
 
