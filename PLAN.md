@@ -228,57 +228,58 @@ node server/index.js &
 ## 五、开发迭代计划
 
 ### Phase 1：项目初始化（第 1 步）
-- [ ] 创建项目目录结构
-- [ ] 初始化 package.json（前端 + 后端）
-- [ ] 安装依赖
-- [ ] 创建 Vite + React 基础模板
-- [ ] 创建 Express 后端基础
-- [ ] 前后端联调测试
-- [ ] README.md 初始化
-- [ ] 提交到 GitHub：`feat: init project scaffold`
+- [x] 创建项目目录结构
+- [x] 初始化 package.json（前端 + 后端）
+- [x] 安装依赖
+- [x] 创建 Vite + React 基础模板
+- [x] 创建 Express 后端基础
+- [x] 前后端联调测试
+- [x] README.md 初始化
+- [x] 提交到 GitHub：`feat: init project scaffold`
 
 ### Phase 2：后端 API 开发（第 2 步）
-- [ ] 日志采集 API（读取 journalctl）
-- [ ] 日志解析与字典匹配
-- [ ] 服务状态检查 API
-- [ ] 监控指标采集 API
-- [ ] Git 备份操作 API
-- [ ] 提交到 GitHub：`feat: add backend APIs`
+- [x] 日志采集 API（读取 journalctl）
+- [x] 日志解析与字典匹配
+- [x] 服务状态检查 API
+- [x] 监控指标采集 API
+- [x] Git 备份操作 API
+- [x] 提交到 GitHub：`feat: add backend APIs`
 
 ### Phase 3：前端基础布局（第 3 步）
-- [ ] 主布局（侧边栏 + 顶部 + 内容区）
-- [ ] 路由配置（三个模块页面）
-- [ ] 顶部告警条组件
-- [ ] 提交到 GitHub：`feat: add frontend layout`
+- [x] 主布局（侧边栏 + 顶部 + 内容区）
+- [x] 路由配置（三个模块页面）
+- [x] 顶部告警条组件
+- [x] 提交到 GitHub：`feat: add frontend layout`
 
 ### Phase 4：日志聚合面板（第 4 步）
-- [ ] 日志列表组件
-- [ ] 筛选器组件
-- [ ] 日志趋势图（ECharts）
-- [ ] 日志含义说明弹窗
-- [ ] 网关日志专区
-- [ ] 提交到 GitHub：`feat: log panel`
+- [x] 日志列表组件
+- [x] 筛选器组件
+- [x] 日志趋势图（ECharts）
+- [x] 日志含义说明（自动匹配中文解释）
+- [x] 网关日志专区
+- [x] 提交到 GitHub：`feat: log panel`
 
 ### Phase 5：监控告警面板（第 5 步）
-- [ ] 服务状态卡片
-- [ ] 告警列表组件
-- [ ] 指标趋势图
-- [ ] 告警规则配置
-- [ ] 提交到 GitHub：`feat: monitor panel`
+- [x] 服务状态卡片
+- [x] 告警列表组件
+- [x] 指标趋势图（内存/磁盘 ECharts 趋势）
+- [x] 告警规则配置
+- [x] 提交到 GitHub：`feat: monitor panel`
 
 ### Phase 6：备份管理面板（第 6 步）
-- [ ] 备份状态组件
-- [ ] 备份配置组件
-- [ ] 备份历史列表
-- [ ] 提交到 GitHub：`feat: backup panel`
+- [x] 备份状态组件
+- [x] 备份配置组件
+- [x] 备份历史列表
+- [x] 一键部署说明
+- [x] 提交到 GitHub：`feat: backup panel`
 
 ### Phase 7：文档与完善（第 7 步）
-- [ ] 日志含义文档 (LOG_DICTIONARY.md)
-- [ ] 告警指南文档 (ALERT_GUIDE.md)
-- [ ] 备份指南文档 (BACKUP_GUIDE.md)
-- [ ] 全局样式优化
-- [ ] 联调测试
-- [ ] 提交到 GitHub：`docs: complete documentation`
+- [x] 日志含义文档 (LOG_DICTIONARY.md)
+- [x] 告警指南文档 (ALERT_GUIDE.md)
+- [x] 备份指南文档 (BACKUP_GUIDE.md)
+- [x] 全局样式优化
+- [x] 联调测试
+- [x] 提交到 GitHub：`docs: complete documentation`
 
 ### Phase 8：上线与优化（第 8 步）
 - [ ] 性能优化
@@ -290,14 +291,14 @@ node server/index.js &
 
 ## 六、验收标准
 
-- [ ] 三个模块（日志聚合、监控告警、备份管理）全部可用
-- [ ] UI 全中文，无英文界面元素
-- [ ] 日志有含义解释，普通用户可理解
-- [ ] 告警规则可配置
-- [ ] 备份可手动触发 + 定时自动执行
-- [ ] 每次功能变更都提交到 GitHub
-- [ ] 未经用户授权绝不重启网关
-- [ ] 项目 README.md 持续更新
+- [x] 三个模块（日志聚合、监控告警、备份管理）全部可用
+- [x] UI 全中文，无英文界面元素
+- [x] 日志有含义解释，普通用户可理解
+- [x] 告警规则可配置
+- [x] 备份可手动触发 + 定时自动执行
+- [x] 每次功能变更都提交到 GitHub
+- [x] 未经用户授权绝不重启网关
+- [x] 项目 README.md 持续更新
 
 ---
 

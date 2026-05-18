@@ -10,29 +10,32 @@
 | 🚨 监控告警 | ✅ 完成 | 100% — 前端面板 + 后端 API |
 | 💾 备份管理 | ✅ 完成 | 100% — 前端面板 + 后端 API |
 
-**当前阶段**: Phase 5 — ECharts 图表集成（Phase 4 前端页面已完成 ✅）
+**当前阶段**: ✅ 全部完成
 
 ---
 
 ## ✨ 功能概览
 
-### 日志聚合
-- 实时采集 openclaw-gateway 和 searxng 日志
+### 📝 日志聚合
+- 实时采集 systemd 日志（journalctl）
 - 中文含义解释（看不懂日志也能明白发生了什么）
-- 按级别/时间/来源筛选
-- 日志趋势可视化
+- 按服务/级别/时间范围/关键词筛选
+- ECharts 日志趋势图（堆叠柱状图，按级别分类）
+- 日志概览统计（按级别、按服务）
 
-### 监控告警
-- 服务存活监控（Gateway / SearXNG）
-- 错误频率告警
-- 模型可用性监控
-- 磁盘/内存/CPU 资源监控
-- 告警规则可配置
+### 🚨 监控告警
+- 服务存活监控（openclaw-gateway、searxng、nginx、docker 等 10 个关键服务）
+- 系统资源监控（内存、磁盘、CPU 负载、运行时间）
+- 内存/磁盘使用趋势图（ECharts 折线图）
+- 实时告警检测（5 条规则：网关停止、搜索停止、内存>80%、磁盘>80%、负载>5）
+- 告警级别：🔴 严重 / 🟡 警告
 
-### 备份管理
-- 定时自动备份配置与数据到 GitHub
-- 手动一键备份
-- 备份历史查看
+### 💾 备份管理
+- Git 双分支策略（main 源码 + backup 完整部署包）
+- 手动一键备份（含 node_modules 和 dist）
+- 备份历史查看（时间、哈希、类型）
+- 一键部署说明（含复制按钮）
+- 零配置跨服务器部署
 
 ---
 
@@ -56,12 +59,23 @@ npm run dev:client  # 前端
 - 后端 API：http://localhost:3100
 - 健康检查：http://localhost:3100/api/health
 
+### 生产部署
+```bash
+# 克隆完整备份（含依赖）
+git clone -b backup https://github.com/xiao-fengyu/monitor-UI.git
+
+# 启动后端
+cd monitor-UI && node server/index.js &
+
+# 前端在 dist/ 目录，用 Nginx 指向即可
+```
+
 ## 📖 文档
 
 - [项目计划书](./PLAN.md)
-- [日志含义大全](./docs/LOG_DICTIONARY.md) (待完成)
-- [告警指南](./docs/ALERT_GUIDE.md) (待完成)
-- [备份指南](./docs/BACKUP_GUIDE.md) (待完成)
+- [日志含义大全](./docs/LOG_DICTIONARY.md)
+- [告警指南](./docs/ALERT_GUIDE.md)
+- [备份指南](./docs/BACKUP_GUIDE.md)
 
 ---
 
@@ -69,10 +83,11 @@ npm run dev:client  # 前端
 
 | 日期 | 变更内容 | 提交 |
 |------|---------|------|
-| 2026-05-18 | Phase 2 进度：日志字典匹配完成（SSH/Cron/服务/磁盘/OpenClaw 等模式中文解释），已集成到日志 API | 10f2f2f |
-| 2026-05-18 | Phase 2 进度：监控 API 完成（服务状态检查、系统资源 CPU/内存/磁盘/负载） | 7bfe260 |
-| 2026-05-18 | Phase 2 进度：日志采集 API 完成（journalctl 读取、关键词过滤、服务日志合并、概览统计） | b6d9562 |
-| 2026-05-18 | Phase 1 完成：项目脚手架搭建，目录结构，Express 后端 + Vite/React 前端，推送到 GitHub | c91637d |
+| 2026-05-18 | 🎉 Phase 1-7 全部完成，v1.0.0 发布 | - |
+| 2026-05-18 | Phase 6 备份面板增强 — 一键复制部署命令 | 0d854c6 |
+| 2026-05-18 | Phase 5 监控面板增强 — 实时告警、内存/磁盘趋势图 | 3425280 |
+| 2026-05-18 | Phase 4 日志趋势图 — ECharts 堆叠柱状图 | 061bd09 |
+| 2026-05-18 | Phase 4 前端页面 — 三大面板 API 全接入 | ca84db6 |
 
 ---
 
@@ -85,4 +100,18 @@ npm run dev:client  # 前端
 
 ---
 
-*最后更新：2026-05-18 15:29*
+## 🏗️ 技术栈
+
+| 层面 | 技术 | 说明 |
+|------|------|------|
+| **前端** | React 18 + Vite 5 | 轻量快速，热更新开发 |
+| **UI 组件** | Ant Design 5.x | 中文生态最好 |
+| **图表** | ECharts + echarts-for-react | 百度出品，日志可视化强 |
+| **路由** | React Router v6 | 声明式路由 |
+| **后端** | Node.js + Express | 读取 systemd 日志、服务状态 |
+| **日志采集** | journalctl | 无需额外日志系统 |
+| **备份机制** | Git 双分支 | main 源码 + backup 完整部署 |
+
+---
+
+*最后更新：2026-05-18 16:45*
