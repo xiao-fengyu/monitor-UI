@@ -31,9 +31,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// SPA fallback
+// SPA fallback（仅当 dist/index.html 存在时）
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
+  const distPath = path.join(__dirname, '../dist/index.html');
+  if (fs.existsSync(distPath)) {
+    res.sendFile(distPath);
+  } else {
+    res.json({ message: '前端未构建，请访问 /api/* 路由' });
+  }
 });
 
 app.listen(PORT, () => {
