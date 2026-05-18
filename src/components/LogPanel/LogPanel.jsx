@@ -40,36 +40,34 @@ const serviceOptions = [
 const columns = [
   {
     title: '时间',
-    dataIndex: '__REALTIME_TIMESTAMP',
+    dataIndex: 'timestamp',
     key: 'time',
     width: 180,
     render: (ts) => {
       if (!ts) return '-'
-      const date = dayjs(parseInt(ts) / 1000)
-      return date.format('MM-DD HH:mm:ss')
+      return dayjs(ts).format('MM-DD HH:mm:ss')
     },
   },
   {
     title: '级别',
-    dataIndex: 'PRIORITY',
+    dataIndex: 'level',
     key: 'level',
     width: 80,
-    render: (priority) => {
-      const map = { 0: 'emerg', 1: 'alert', 2: 'crit', 3: 'err', 4: 'warning', 5: 'notice', 6: 'info', 7: 'debug' }
-      const level = map[priority] || 'info'
-      return <Tag color={levelColors[level]} style={{ margin: 0 }}>{level.toUpperCase()}</Tag>
+    render: (level) => {
+      const lvl = (level || 'info').toLowerCase()
+      return <Tag color={levelColors[lvl]} style={{ margin: 0 }}>{lvl.toUpperCase()}</Tag>
     },
   },
   {
     title: '服务',
-    dataIndex: '_SYSTEMD_UNIT',
+    dataIndex: 'unit',
     key: 'service',
     width: 200,
     render: (unit) => <Tag color="purple">{unit || '-'}</Tag>,
   },
   {
     title: '消息',
-    dataIndex: 'MESSAGE',
+    dataIndex: 'message',
     key: 'message',
     ellipsis: true,
   },
@@ -77,7 +75,7 @@ const columns = [
     title: '中文解释',
     key: 'explanation',
     render: (_, record) => {
-      const msg = record.MESSAGE || ''
+      const msg = record.message || ''
       // Simple pattern matching for common log types
       let explanation = null
 
@@ -117,35 +115,21 @@ function LogPanel() {
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(false)
   const [overview, setOverview] = useState(null)
-  const [trendData, setTrendData] = useState([])
   const [service, setService] = useState('')
   const [since, setSince] = useState('1 hour ago')
   const [grep, setGrep] = useState('')
 
-  const fetchTrend = useCallback(async () => {
-    try {
-      const res = await logsAPI.getTrend({ since })
-      setTrendData(res.data || [])
-    } catch {
-      // ignore
-    }
-  }, [since])
-
-  const fetchOverview = useCallback(async () => {
-    try {
-      const res = await logsAPI.getOverview()
-      setOverview(res.data)
-    } catch {
-      // ignore
-    }
-  }, [])
-
   const fetchLogs = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await logsAPI.getLogs({ service, since, grep, lines: 200 })
+      const params = { unit: service, since, grep, lines: 200 }
+      const res = await logsAPI.getLogs(params)
       setLogs(res.data?.logs || [])
-      message.success(`获取 ${res.data?.total || 0} 条日志`)
+      // 概览数据
+      try {
+        const ovRes = await logsAPI.getOverview()
+        setOverview(ovRes.data)
+      } catch {}
     } catch (err) {
       message.error('获取日志失败：' + (err.message || '未知错误'))
     } finally {
@@ -156,8 +140,22 @@ function LogPanel() {
   useEffect(() => {
     fetchOverview()
     fetchLogs()
-    fetchTrend()
   }, [])
+
+  // 趋势数据（独立请求）
+  const [trendData, setTrendData] = useState([])
+
+  useEffect(() => {
+    const fetchTrend = async () => {
+      try {
+        const res = await logsAPI.getTrend({ since })
+        setTrendData(res.data || [])
+      } catch {
+        // ignore
+      }
+    }
+    fetchTrend()
+  }, [since, fetchLogs])
 
   return (
     <div>
@@ -168,11 +166,8 @@ function LogPanel() {
         <Card style={{ marginTop: 16 }} size="small">
           <Space size="large">
             <Text>总日志量：<Text strong>{overview.total || '-'}</Text></Text>
-            {Object.entries(overview.byPriority || {}).map(([level, count]) => (
-              <Tag key={level} color={levelColors[level]}>{level}: {count}</Tag>
-            ))}
-            {Object.entries(overview.byService || {}).slice(0, 5).map(([svc, count]) => (
-              <Tag key={svc} color="purple">{svc?.split('.')[0]}: {count}</Tag>
+            {Object.entries(overview.byLevel || {}).map(([level, count]) => (
+              <Tag key={level} color={levelColors[level.toLowerCase()]}>{level}: {count}</Tag>
             ))}
           </Space>
         </Card>
