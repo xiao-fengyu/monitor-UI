@@ -138,7 +138,6 @@ function LogPanel() {
   }, [service, since, grep])
 
   useEffect(() => {
-    fetchOverview()
     fetchLogs()
   }, [])
 
