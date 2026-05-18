@@ -13,6 +13,8 @@ export const logsAPI = {
     api.get('/logs', { params: { overview: true } }).then(r => r.data),
   getKeyServices: () =>
     api.get('/logs', { params: { all: true, lines: 50 } }).then(r => r.data),
+  getTrend: (params = {}) =>
+    api.get('/logs/trend', { params }).then(r => r.data),
 }
 
 // 监控 API

@@ -76,6 +76,66 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * GET /api/logs/trend
+ * 获取日志趋势数据（按时间+级别聚合）
+ * 
+ * 参数:
+ *   since - 起始时间（如 "6 hours ago"）
+ */
+router.get('/trend', async (req, res) => {
+  try {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+
+    const since = req.query.since || '6 hours ago';
+
+    // 获取所有日志，输出 JSON 格式
+    const { stdout } = await execAsync(
+      `journalctl --since "${since}" --output=json -q 2>/dev/null | head -5000`
+    );
+
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    const entries = lines.map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean);
+
+    // 按小时聚合
+    const hourlyData = {};
+    entries.forEach(entry => {
+      const ts = entry.__REALTIME_TIMESTAMP;
+      if (!ts) return;
+      const date = new Date(parseInt(ts) / 1000);
+      const hourKey = date.toISOString().slice(0, 13); // YYYY-MM-DDTHH
+      const priority = parseInt(entry.PRIORITY) || 6;
+
+      if (!hourlyData[hourKey]) {
+        hourlyData[hourKey] = { emerg: 0, alert: 0, crit: 0, err: 0, warning: 0, notice: 0, info: 0, debug: 0 };
+      }
+
+      const levelMap = ['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug'];
+      const level = levelMap[priority] || 'info';
+      hourlyData[hourKey][level]++;
+    });
+
+    // 排序并格式化
+    const sortedHours = Object.keys(hourlyData).sort();
+    const trendData = sortedHours.map(hour => ({
+      time: hour,
+      ...hourlyData[hour],
+    }));
+
+    res.json({
+      success: true,
+      data: trendData,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/logs/services
  * 获取所有关键服务列表
  */

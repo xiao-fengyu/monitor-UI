@@ -3,6 +3,7 @@ import {
   Card, Table, Tag, Select, Input, Button, Space, Typography, Spin, message
 } from 'antd'
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons'
+import ReactECharts from 'echarts-for-react'
 import { logsAPI } from '../../services/api'
 import dayjs from 'dayjs'
 
@@ -116,9 +117,19 @@ function LogPanel() {
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(false)
   const [overview, setOverview] = useState(null)
+  const [trendData, setTrendData] = useState([])
   const [service, setService] = useState('')
   const [since, setSince] = useState('1 hour ago')
   const [grep, setGrep] = useState('')
+
+  const fetchTrend = useCallback(async () => {
+    try {
+      const res = await logsAPI.getTrend({ since })
+      setTrendData(res.data || [])
+    } catch {
+      // ignore
+    }
+  }, [since])
 
   const fetchOverview = useCallback(async () => {
     try {
@@ -145,6 +156,7 @@ function LogPanel() {
   useEffect(() => {
     fetchOverview()
     fetchLogs()
+    fetchTrend()
   }, [])
 
   return (
@@ -165,6 +177,60 @@ function LogPanel() {
           </Space>
         </Card>
       )}
+
+      {/* 日志趋势图 */}
+      <Card style={{ marginTop: 16 }} title="📊 日志趋势" size="small">
+        {trendData.length > 0 ? (
+          <ReactECharts
+            option={{
+              tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+              legend: {
+                data: ['ERROR', 'CRIT', 'WARNING', 'INFO', 'DEBUG'],
+                top: 5,
+              },
+              grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+              xAxis: {
+                type: 'category',
+                data: trendData.map(d => dayjs(d.time).format('HH:mm')),
+              },
+              yAxis: { type: 'value', name: '数量' },
+              series: [
+                {
+                  name: 'ERROR',
+                  type: 'bar',
+                  stack: 'total',
+                  itemStyle: { color: '#ff4d4f' },
+                  data: trendData.map(d => d.err + d.alert + d.emerg + d.crit),
+                },
+                {
+                  name: 'WARNING',
+                  type: 'bar',
+                  stack: 'total',
+                  itemStyle: { color: '#faad14' },
+                  data: trendData.map(d => d.warning),
+                },
+                {
+                  name: 'INFO',
+                  type: 'bar',
+                  stack: 'total',
+                  itemStyle: { color: '#1890ff' },
+                  data: trendData.map(d => d.info + d.notice),
+                },
+                {
+                  name: 'DEBUG',
+                  type: 'bar',
+                  stack: 'total',
+                  itemStyle: { color: '#13c2c2' },
+                  data: trendData.map(d => d.debug),
+                },
+              ],
+            }}
+            style={{ height: 280 }}
+          />
+        ) : (
+          <Text type="secondary">暂无趋势数据</Text>
+        )}
+      </Card>
 
       <Card style={{ marginTop: 16 }} title="查询条件" size="small">
         <Space wrap>
