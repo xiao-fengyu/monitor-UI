@@ -1,10 +1,26 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Card, Table, Tag, Button, Typography, Spin, Space, message, Statistic, Row, Col, Descriptions, Popconfirm } from 'antd'
-import { CloudSyncOutlined, ClockCircleOutlined, ReloadOutlined, CloudUploadOutlined } from '@ant-design/icons'
+import { Card, Table, Tag, Button, Typography, Spin, Space, message, Statistic, Row, Col, Descriptions, Popconfirm, Alert, Collapse } from 'antd'
+import { CloudSyncOutlined, ClockCircleOutlined, ReloadOutlined, CloudUploadOutlined, CopyOutlined } from '@ant-design/icons'
+import ReactECharts from 'echarts-for-react'
 import { backupAPI } from '../../services/api'
 import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
+
+const cloneCommands = [
+  {
+    label: '克隆完整备份（含依赖）',
+    code: 'git clone -b backup https://github.com/xiao-fengyu/monitor-UI.git',
+  },
+  {
+    label: '克隆源码（仅 main 分支）',
+    code: 'git clone https://github.com/xiao-fengyu/monitor-UI.git',
+  },
+  {
+    label: '启动后端服务',
+    code: 'cd monitor-UI && node server/index.js &',
+  },
+]
 
 function BackupPanel() {
   const [status, setStatus] = useState(null)
@@ -34,7 +50,7 @@ function BackupPanel() {
       const result = await backupAPI.runBackup()
       if (result.success) {
         message.success('备份成功完成')
-        fetchData() // Refresh data
+        fetchData()
       } else {
         message.error('备份失败：' + (result.error || '未知错误'))
       }
@@ -43,6 +59,14 @@ function BackupPanel() {
     } finally {
       setBackupRunning(false)
     }
+  }
+
+  const handleCopy = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      message.success('已复制到剪贴板')
+    }).catch(() => {
+      message.error('复制失败，请手动选择文本')
+    })
   }
 
   useEffect(() => {
@@ -79,7 +103,7 @@ function BackupPanel() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <Title level={4} style={{ margin: 0 }}>💾 备份管理</Title>
-          <Text type="secondary">Git 备份历史、手动触发、状态监控</Text>
+          <Text type="secondary">Git 备份历史、手动触发、零配置部署</Text>
         </div>
         <Space>
           <Popconfirm
@@ -134,6 +158,7 @@ function BackupPanel() {
         </Col>
       </Row>
 
+      {/* 备份信息 */}
       <Descriptions
         bordered
         size="small"
@@ -148,6 +173,30 @@ function BackupPanel() {
           使用独立的 backup 分支，包含 node_modules 和 dist，支持零配置部署
         </Descriptions.Item>
       </Descriptions>
+
+      {/* 一键部署说明 */}
+      <Card style={{ marginTop: 16 }} title="🚀 一键部署（新服务器）" size="small">
+        <Space direction="vertical" style={{ width: '100%' }}>
+          {cloneCommands.map((cmd, idx) => (
+            <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text strong style={{ width: 150 }}>{cmd.label}:</Text>
+              <code style={{
+                flex: 1, padding: '4px 8px', background: '#f5f5f5',
+                borderRadius: 4, fontSize: 13, fontFamily: 'monospace',
+              }}>
+                {cmd.code}
+              </code>
+              <Button
+                type="text"
+                icon={<CopyOutlined />}
+                size="small"
+                onClick={() => handleCopy(cmd.code)}
+                style={{ marginLeft: 8 }}
+              />
+            </div>
+          ))}
+        </Space>
+      </Card>
 
       {/* 备份历史 */}
       <Card style={{ marginTop: 16 }} title="备份历史" size="small">
