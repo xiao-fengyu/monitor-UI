@@ -1,14 +1,19 @@
-import { ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
+import { Routes, Route, Navigate } from 'react-router-dom'
+import MainLayout from './components/Layout/MainLayout'
+import LogPanel from './components/LogPanel/LogPanel'
+import MonitorPanel from './components/MonitorPanel/MonitorPanel'
+import BackupPanel from './components/BackupPanel/BackupPanel'
 
 function App() {
   return (
-    <ConfigProvider locale={zhCN}>
-      <div style={{ padding: 24, textAlign: 'center' }}>
-        <h1>🖥️ OpenClaw 监控面板</h1>
-        <p>项目初始化完成，各模块开发中...</p>
-      </div>
-    </ConfigProvider>
+    <Routes>
+      <Route path="/" element={<MainLayout />}>
+        <Route index element={<Navigate to="/logs" replace />} />
+        <Route path="logs" element={<LogPanel />} />
+        <Route path="monitor" element={<MonitorPanel />} />
+        <Route path="backup" element={<BackupPanel />} />
+      </Route>
+    </Routes>
   )
 }
 
