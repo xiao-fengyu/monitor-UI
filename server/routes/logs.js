@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, KEY_SERVICES } = require('../utils/logger');
+const { parseLogs } = require('../utils/logDictionary');
 
 /**
  * GET /api/logs
@@ -32,11 +33,12 @@ router.get('/', async (req, res) => {
     // 获取所有关键服务日志
     if (all === 'true') {
       const logs = await fetchKeyServiceLogs(parseInt(lines) || 50);
+      const parsedLogs = parseLogs(logs);
       return res.json({
         success: true,
         data: {
-          logs,
-          total: logs.length,
+          logs: parsedLogs,
+          total: parsedLogs.length,
           services: KEY_SERVICES,
         },
         timestamp: new Date().toISOString(),
@@ -52,11 +54,14 @@ router.get('/', async (req, res) => {
       grep: grep || '',
     });
 
+    // 解析日志，附加中文解释
+    const parsedLogs = parseLogs(logs);
+
     res.json({
       success: true,
       data: {
-        logs,
-        total: logs.length,
+        logs: parsedLogs,
+        total: parsedLogs.length,
         unit: unit || '(全部)',
       },
       timestamp: new Date().toISOString(),
