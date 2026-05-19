@@ -38,4 +38,11 @@ export const backupAPI = {
   getConfig: () => api.get('/backup/config').then(r => r.data),
 }
 
+// AI 配置 API
+export const aiConfigAPI = {
+  get: () => api.get('/ai-config').then(r => r.data),
+  save: (data) => api.post('/ai-config', data).then(r => r.data),
+  test: (data) => api.post('/ai-config/test', data).then(r => r.data),
+}
+
 export default api

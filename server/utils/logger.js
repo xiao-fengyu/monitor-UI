@@ -1,7 +1,60 @@
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
+const path = require('path');
 const execAsync = promisify(exec);
+
+const AI_CONFIG_PATH = path.join(__dirname, '../config/ai-model.json');
+
+/**
+ * 获取 AI 模型配置
+ * 优先读取用户自定义配置，否则回退到 openclaw.json
+ */
+function getAIModelConfig() {
+  // 1. 尝试读取用户自定义配置
+  try {
+    if (fs.existsSync(AI_CONFIG_PATH)) {
+      const userConfig = JSON.parse(fs.readFileSync(AI_CONFIG_PATH, 'utf8'));
+      if (userConfig.enabled && userConfig.baseUrl && userConfig.apiKey && userConfig.model) {
+        const url = new URL(userConfig.baseUrl);
+        return {
+          hostname: url.hostname,
+          port: url.port || (url.protocol === 'https:' ? 443 : 80),
+          path: url.pathname.replace(/\/$/, '') + '/chat/completions',
+          protocol: url.protocol,
+          apiKey: userConfig.apiKey,
+          model: userConfig.model,
+          source: 'user-config',
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[logger] Failed to read user AI config:', err.message);
+  }
+
+  // 2. 回退到 openclaw.json
+  try {
+    const configPath = '/root/.openclaw/openclaw.json';
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const provider = config.models?.providers?.openclawroot;
+    if (provider && provider.apiKey && provider.baseUrl) {
+      const url = new URL(provider.baseUrl);
+      return {
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: url.pathname.replace(/\/$/, '') + '/chat/completions',
+        protocol: url.protocol,
+        apiKey: provider.apiKey,
+        model: provider.models?.[0]?.id || 'gpt-4o-mini',
+        source: 'openclaw-fallback',
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
 
 // 重点关注的关键服务
 const KEY_SERVICES = [
@@ -259,64 +312,67 @@ async function getLogOverview(since = '1 hour ago') {
 }
 
 /**
+ * 调用 AI 模型 API（通用）
+ */
+function callAI({ config, messages, maxTokens = 500, temperature = 0.3 }) {
+  const https = config.protocol === 'https:' ? require('https') : require('http');
+  const payload = JSON.stringify({
+    model: config.model,
+    messages,
+    max_tokens: maxTokens,
+    temperature,
+  });
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: config.hostname,
+      port: config.port,
+      path: config.path,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`,
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          resolve(json.choices?.[0]?.message?.content || '');
+        } catch {
+          resolve('');
+        }
+      });
+    });
+    req.on('error', () => resolve(''));
+    req.write(payload);
+    req.end();
+  });
+}
+
+/**
  * 翻译单条日志消息为中文
- * 使用本地配置的 OpenAI 兼容 API
+ * 使用可配置的 AI 模型 API
  */
 async function translateLogMessage(text) {
   if (!text || text.length < 5) return text;
 
+  const config = getAIModelConfig();
+  if (!config) return '[翻译] 请先在设置中配置 AI 模型';
+
   try {
-    // 读取配置获取 API 信息
-    const configPath = '/root/.openclaw/openclaw.json';
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const provider = config.models?.providers?.openclawroot;
-    if (!provider || !provider.apiKey) {
-      return '[翻译] API 配置不可用';
-    }
-
-    const https = require('https');
-    const url = new URL(provider.baseUrl + '/chat/completions');
-
-    return new Promise((resolve, reject) => {
-      const payload = JSON.stringify({
-        model: provider.models?.[0]?.id || 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: 'You are a helpful translator. Translate the given log message into concise Chinese. Only output the translation, no explanations.' },
-          { role: 'user', content: text.substring(0, 2000) }
-        ],
-        max_tokens: 300,
-        temperature: 0.3,
-      });
-
-      const req = https.request({
-        hostname: url.hostname,
-        port: 443,
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${provider.apiKey}`,
-          'Content-Length': Buffer.byteLength(payload),
-        },
-      }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(data);
-            const translation = json.choices?.[0]?.message?.content?.trim();
-            resolve(translation || text);
-          } catch {
-            resolve(text);
-          }
-        });
-      });
-
-      req.on('error', () => resolve(text));
-      req.setTimeout(10000, () => { req.destroy(); resolve(text); });
-      req.write(payload);
-      req.end();
+    const content = await callAI({
+      config,
+      messages: [
+        { role: 'system', content: 'You are a helpful translator. Translate the given log message into concise Chinese. Only output the translation, no explanations.' },
+        { role: 'user', content: text.substring(0, 2000) }
+      ],
+      maxTokens: 300,
+      temperature: 0.3,
     });
+    return content || text;
   } catch {
     return text;
   }
@@ -377,22 +433,20 @@ async function analyzeLogs(options = {}) {
       return { name, total: svcLogs.length, errors: errs };
     });
 
-    // 读取 LLM 配置
-    const configPath = '/root/.openclaw/openclaw.json';
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const provider = config.models?.providers?.openclawroot;
-    if (!provider || !provider.apiKey) {
+    // 读取 AI 模型配置
+    const config = getAIModelConfig();
+    if (!config) {
       // 降级：返回基础统计
       return {
         health: levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
-        summary: `共 ${logs.length} 条日志，错误 ${levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg} 条，警告 ${levelCounts.warning} 条。`,
+        summary: `共 ${logs.length} 条日志，错误 ${levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg} 条，警告 ${levelCounts.warning} 条。请先在设置中配置 AI 模型。`,
         issues: errorLogs.slice(0, 10).map(l => ({
           service: l.unit,
           description: l.message?.substring(0, 200),
           level: l.level,
         })),
         recommendations: [],
-        trend: { direction: 'unknown', description: '无法获取趋势' },
+        trend: { direction: 'unknown', description: '未配置 AI 模型' },
         normalServices: serviceStatus.filter(s => s.errors === 0).map(s => s.name),
       };
     }
@@ -437,87 +491,47 @@ ${keyMessages || '（无错误/警告日志）'}
 3. recommendations 要具体可操作，不要说"请检查"这种废话
 4. trend.direction 只能选 worsening/stable/improving 之一`;
 
-    const payload = JSON.stringify({
-      model: provider.models?.[0]?.id || 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt.substring(0, 6000) }],
-      max_tokens: 2000,
-      temperature: 0.3,
-    });
-
-    const https = require('https');
-    const url = new URL(provider.baseUrl + '/chat/completions');
-
-    return new Promise((resolve) => {
-      const req = https.request({
-        hostname: url.hostname,
-        port: 443,
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${provider.apiKey}`,
-          'Content-Length': Buffer.byteLength(payload),
-        },
-      }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(data);
-            const content = json.choices?.[0]?.message?.content || '';
-            // 尝试解析 JSON
-            let analysis;
-            try {
-              const jsonMatch = content.match(/\{[\s\S]*\}/);
-              analysis = JSON.parse(jsonMatch[0]);
-            } catch {
-              analysis = {
-                health: levelCounts.err > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
-                summary: content.substring(0, 200),
-                issues: [],
-                recommendations: [],
-                trend: { direction: 'unknown', description: '' },
-                normalServices: [],
-              };
-            }
-            resolve(analysis);
-          } catch {
-            // LLM 调用失败，返回基础统计
-            resolve({
-              health: levelCounts.err + levelCounts.crit > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
-              summary: `共 ${logs.length} 条日志，错误 ${levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg} 条，警告 ${levelCounts.warning} 条。`,
-              issues: errorLogs.slice(0, 5).map(l => ({ service: l.unit, description: l.message?.substring(0, 200), level: 'warning' })),
-              recommendations: [],
-              trend: { direction: 'unknown', description: '分析失败' },
-              normalServices: serviceStatus.filter(s => s.errors === 0).map(s => s.name),
-            });
-          }
-        });
+    // 调用 AI 进行分析
+    let content;
+    try {
+      content = await callAI({
+        config,
+        messages: [{ role: 'user', content: prompt.substring(0, 6000) }],
+        maxTokens: 2000,
+        temperature: 0.3,
       });
+    } catch (err) {
+      content = '';
+    }
 
-      req.on('error', () => {
-        resolve({
-          health: 'unknown',
-          summary: 'LLM 调用失败，请检查网络连接',
-          issues: [],
-          recommendations: [],
-          trend: { direction: 'unknown', description: '' },
-          normalServices: [],
-        });
-      });
-      req.setTimeout(30000, () => { req.destroy();
-        resolve({
-          health: 'unknown',
-          summary: '分析超时，请稍后重试',
-          issues: [],
-          recommendations: [],
-          trend: { direction: 'unknown', description: '' },
-          normalServices: [],
-        });
-      });
-      req.write(payload);
-      req.end();
-    });
+    // 解析 AI 返回结果
+    if (!content) {
+      return {
+        health: levelCounts.err + levelCounts.crit > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
+        summary: `共 ${logs.length} 条日志，错误 ${levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg} 条，警告 ${levelCounts.warning} 条。`,
+        issues: errorLogs.slice(0, 5).map(l => ({ service: l.unit, description: l.message?.substring(0, 200), level: 'warning' })),
+        recommendations: [],
+        trend: { direction: 'unknown', description: 'AI 调用失败' },
+        normalServices: serviceStatus.filter(s => s.errors === 0).map(s => s.name),
+      };
+    }
+
+    let analysis;
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      analysis = JSON.parse(jsonMatch[0]);
+    } catch {
+      analysis = {
+        health: levelCounts.err > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
+        summary: content.substring(0, 200),
+        issues: [],
+        recommendations: [],
+        trend: { direction: 'unknown', description: '' },
+        normalServices: [],
+      };
+    }
+
+    return analysis;
   } catch (err) {
     console.error('[logger] analyzeLogs error:', err.message);
     return { health: 'unknown', summary: '分析出错: ' + err.message, issues: [], recommendations: [], trend: {}, normalServices: [] };

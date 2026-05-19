@@ -5,6 +5,7 @@ import {
   FileTextOutlined,
   DashboardOutlined,
   CloudSyncOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 import AlertBar from './AlertBar'
 
@@ -15,6 +16,7 @@ const menuItems = [
   { key: '/logs', icon: <FileTextOutlined />, label: '日志聚合' },
   { key: '/monitor', icon: <DashboardOutlined />, label: '监控告警' },
   { key: '/backup', icon: <CloudSyncOutlined />, label: '备份管理' },
+  { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
 ]
 
 function MainLayout() {

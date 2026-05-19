@@ -4,3 +4,4 @@ dist/
 *.log
 .env
 .DS_Store
+server/config/ai-model.json
