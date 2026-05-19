@@ -45,14 +45,13 @@ async function fetchJournalLogs(options = {}) {
     grep = '',
   } = options;
 
+  // 多选级别：不在 journalctl -p 过滤（不支持列表），改为 JS 层过滤
+  const priorityList = priority ? priority.split(',').map(p => p.trim()).filter(Boolean) : [];
+
   let cmd = `journalctl --no-pager --output=json --lines=${lines} --since="${since}"`;
 
   if (unit) {
     cmd += ` -u ${unit}`;
-  }
-
-  if (priority) {
-    cmd += ` -p ${priority}`;
   }
 
   try {
@@ -68,13 +67,21 @@ async function fetchJournalLogs(options = {}) {
       })
       .filter(Boolean);
 
-    // 关键词过滤（在 JS 层做，避免 journalctl grep 兼容问题）
+    // 关键词过滤
     let filtered = logs;
     if (grep) {
       const lowerGrep = grep.toLowerCase();
       filtered = logs.filter(log =>
         (log.MESSAGE || '').toLowerCase().includes(lowerGrep)
       );
+    }
+
+    // 级别过滤（多选支持）
+    if (priorityList.length > 0) {
+      filtered = filtered.filter(log => {
+        const level = LEVEL_MAP[log.PRIORITY] || 'info';
+        return priorityList.includes(level);
+      });
     }
 
     return filtered.map(log => ({
