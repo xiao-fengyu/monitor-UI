@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons'
 import { logsAPI } from '../../services/api'
 import dayjs from 'dayjs'
+import LogAnalysis from './LogAnalysis'
 
 const { Title, Text } = Typography
 const { RangePicker } = DatePicker
@@ -270,6 +271,13 @@ function LogPanel() {
     <div>
       <Title level={4}>📝 日志聚合</Title>
       <Text type="secondary">采集系统日志，附带中文含义解释和 AI 翻译</Text>
+
+      {/* ========== AI 诊断面板 ========== */}
+      <LogAnalysis
+        unit={form.getFieldValue('service')}
+        since={timeMode === 'preset' ? form.getFieldValue('timePreset') : undefined}
+        lines={200}
+      />
 
       {/* ========== 搜索区域 ========== */}
       <Card style={{ marginTop: 16 }} title={<><FilterOutlined /> 查询条件</>} size="small">

@@ -322,9 +322,212 @@ async function translateLogMessage(text) {
   }
 }
 
+/**
+ * 分析日志并生成智能诊断报告
+ * 使用本地 LLM 对日志进行结构化分析
+ */
+async function analyzeLogs(options = {}) {
+  const {
+    unit = '',
+    since = '1 hour ago',
+    lines = 200,
+  } = options;
+
+  try {
+    // 获取日志（自动路由：openclaw-gateway 走文件，其他走 journalctl）
+    const logs = await fetchJournalLogs({ unit, since, lines, priority: '' });
+
+    if (!logs || logs.length === 0) {
+      return {
+        health: 'normal',
+        summary: '所选时间范围内无日志记录',
+        issues: [],
+        recommendations: [],
+        trend: { direction: 'stable', description: '无数据' },
+        normalServices: [],
+      };
+    }
+
+    // 统计数据
+    const levelCounts = { emerg: 0, alert: 0, crit: 0, err: 0, warning: 0, notice: 0, info: 0, debug: 0 };
+    const serviceLogs = {};
+
+    logs.forEach(log => {
+      const lvl = (log.level || 'info').toLowerCase();
+      if (levelCounts[lvl] !== undefined) levelCounts[lvl]++;
+
+      const svc = log.unit || 'unknown';
+      if (!serviceLogs[svc]) serviceLogs[svc] = [];
+      serviceLogs[svc].push(log);
+    });
+
+    // 构建分析摘要
+    const errorLogs = logs.filter(l => ['emerg', 'alert', 'crit', 'err'].includes((l.level || '').toLowerCase()));
+    const warningLogs = logs.filter(l => (l.level || '').toLowerCase() === 'warning');
+
+    // 提取关键消息（错误 + 警告，去重前 50 条）
+    const keyMessages = [...errorLogs, ...warningLogs]
+      .slice(0, 50)
+      .map(l => `  [${l.level?.toUpperCase()}] [${l.unit}] ${l.message}`)
+      .join('\n');
+
+    // 统计各服务状态
+    const serviceStatus = Object.entries(serviceLogs).map(([name, svcLogs]) => {
+      const errs = svcLogs.filter(l => ['emerg', 'alert', 'crit', 'err'].includes((l.level || '').toLowerCase())).length;
+      return { name, total: svcLogs.length, errors: errs };
+    });
+
+    // 读取 LLM 配置
+    const configPath = '/root/.openclaw/openclaw.json';
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const provider = config.models?.providers?.openclawroot;
+    if (!provider || !provider.apiKey) {
+      // 降级：返回基础统计
+      return {
+        health: levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
+        summary: `共 ${logs.length} 条日志，错误 ${levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg} 条，警告 ${levelCounts.warning} 条。`,
+        issues: errorLogs.slice(0, 10).map(l => ({
+          service: l.unit,
+          description: l.message?.substring(0, 200),
+          level: l.level,
+        })),
+        recommendations: [],
+        trend: { direction: 'unknown', description: '无法获取趋势' },
+        normalServices: serviceStatus.filter(s => s.errors === 0).map(s => s.name),
+      };
+    }
+
+    const prompt = `你是一位资深的系统运维工程师。请分析以下系统日志并生成结构化诊断报告。
+
+【统计信息】
+- 总日志条数：${logs.length}
+- ERROR 及以上级别：${levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg} 条
+- WARNING：${levelCounts.warning} 条
+- INFO：${levelCounts.info} 条
+
+【各服务状态】
+${serviceStatus.map(s => `- ${s.name}: ${s.total} 条日志, ${s.errors} 条错误`).join('\n')}
+
+【关键日志（错误+警告）】
+${keyMessages || '（无错误/警告日志）'}
+
+请严格按以下 JSON 格式回复（不要加任何多余文字）：
+{
+  "health": "normal|warning|error|critical",
+  "summary": "一句话总结整体状况（中文，50字以内）",
+  "issues": [
+    {
+      "service": "服务名",
+      "description": "问题描述（中文）",
+      "level": "critical|warning|info",
+      "pattern": "是否重复出现及频率"
+    }
+  ],
+  "recommendations": ["具体可执行的修复建议1", "建议2"],
+  "trend": {
+    "direction": "worsening|stable|improving",
+    "description": "趋势描述（中文）"
+  },
+  "normalServices": ["运行正常的服务名列表"]
+}
+
+注意：
+1. health 只能选 normal/warning/error/critical 之一
+2. issues 按严重程度排序，最多 8 个
+3. recommendations 要具体可操作，不要说"请检查"这种废话
+4. trend.direction 只能选 worsening/stable/improving 之一`;
+
+    const payload = JSON.stringify({
+      model: provider.models?.[0]?.id || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt.substring(0, 6000) }],
+      max_tokens: 2000,
+      temperature: 0.3,
+    });
+
+    const https = require('https');
+    const url = new URL(provider.baseUrl + '/chat/completions');
+
+    return new Promise((resolve) => {
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${provider.apiKey}`,
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            const content = json.choices?.[0]?.message?.content || '';
+            // 尝试解析 JSON
+            let analysis;
+            try {
+              const jsonMatch = content.match(/\{[\s\S]*\}/);
+              analysis = JSON.parse(jsonMatch[0]);
+            } catch {
+              analysis = {
+                health: levelCounts.err > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
+                summary: content.substring(0, 200),
+                issues: [],
+                recommendations: [],
+                trend: { direction: 'unknown', description: '' },
+                normalServices: [],
+              };
+            }
+            resolve(analysis);
+          } catch {
+            // LLM 调用失败，返回基础统计
+            resolve({
+              health: levelCounts.err + levelCounts.crit > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
+              summary: `共 ${logs.length} 条日志，错误 ${levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg} 条，警告 ${levelCounts.warning} 条。`,
+              issues: errorLogs.slice(0, 5).map(l => ({ service: l.unit, description: l.message?.substring(0, 200), level: 'warning' })),
+              recommendations: [],
+              trend: { direction: 'unknown', description: '分析失败' },
+              normalServices: serviceStatus.filter(s => s.errors === 0).map(s => s.name),
+            });
+          }
+        });
+      });
+
+      req.on('error', () => {
+        resolve({
+          health: 'unknown',
+          summary: 'LLM 调用失败，请检查网络连接',
+          issues: [],
+          recommendations: [],
+          trend: { direction: 'unknown', description: '' },
+          normalServices: [],
+        });
+      });
+      req.setTimeout(30000, () => { req.destroy();
+        resolve({
+          health: 'unknown',
+          summary: '分析超时，请稍后重试',
+          issues: [],
+          recommendations: [],
+          trend: { direction: 'unknown', description: '' },
+          normalServices: [],
+        });
+      });
+      req.write(payload);
+      req.end();
+    });
+  } catch (err) {
+    console.error('[logger] analyzeLogs error:', err.message);
+    return { health: 'unknown', summary: '分析出错: ' + err.message, issues: [], recommendations: [], trend: {}, normalServices: [] };
+  }
+}
+
 module.exports = {
   fetchJournalLogs,
   fetchGatewayLogs,
+  analyzeLogs,
   fetchKeyServiceLogs,
   getLogOverview,
   translateLogMessage,

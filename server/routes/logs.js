@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, translateLogMessage, KEY_SERVICES } = require('../utils/logger');
+const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, translateLogMessage, analyzeLogs, KEY_SERVICES } = require('../utils/logger');
 const { parseLogs } = require('../utils/logDictionary');
 
 /**
@@ -159,6 +159,30 @@ router.post('/translate', async (req, res) => {
     const translation = await translateLogMessage(text);
     res.json({ success: true, data: { translation } });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/logs/analyze
+ * AI 日志智能诊断
+ * 
+ * 参数:
+ *   unit  - 服务名（可选，不传则分析所有关键服务）
+ *   since - 时间范围（如 "1 hour ago"）
+ *   lines - 日志条数（默认 200）
+ */
+router.post('/analyze', async (req, res) => {
+  try {
+    const { unit, since, lines } = req.body;
+    const analysis = await analyzeLogs({
+      unit: unit || '',
+      since: since || '1 hour ago',
+      lines: parseInt(lines) || 200,
+    });
+    res.json({ success: true, data: analysis });
+  } catch (err) {
+    console.error('[logs/analyze] error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
