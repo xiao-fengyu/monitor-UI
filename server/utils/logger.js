@@ -28,7 +28,120 @@ const LEVEL_MAP = {
 };
 
 /**
- * 读取 journalctl 日志
+ * 读取 OpenClaw Gateway 日志文件
+ * 路径：/tmp/openclaw/openclaw-YYYY-MM-DD.log（JSONL 格式）
+ * 包含 journalctl 无法捕获的 Gateway 内部应用日志
+ */
+async function fetchGatewayLogs(options = {}) {
+  const {
+    priority = '',
+    since = '1 hour ago',
+    lines = 200,
+    grep = '',
+  } = options;
+
+  const priorityList = priority ? priority.split(',').map(p => p.trim()).filter(Boolean) : [];
+
+  try {
+    // 确定日志文件：优先当天，回退昨天
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    let logFile = `/tmp/openclaw/openclaw-${today}.log`;
+    let fallbackFile = `/tmp/openclaw/openclaw-${yesterday}.log`;
+
+    if (!fs.existsSync(logFile)) {
+      logFile = fallbackFile;
+    }
+
+    if (!fs.existsSync(logFile)) {
+      console.error('[logger] gateway log file not found:', logFile);
+      return [];
+    }
+
+    // 计算时间截断点
+    let cutoffTime = null;
+    try {
+      if (since.includes('ago') || since.includes('hour') || since.includes('min') || since.includes('day')) {
+        const { stdout } = await execAsync(`date -d "${since}" +%s 2>/dev/null`);
+        cutoffTime = parseInt(stdout.trim()) * 1000;
+      } else {
+        cutoffTime = new Date(since).getTime();
+      }
+    } catch { /* ignore */ }
+
+    // 读文件末尾足够多的行
+    const readBytes = Math.min(lines * 2000, 500000); // 估计每行约 2KB
+    const { stdout } = await execAsync(`tail -c ${readBytes} "${logFile}" 2>/dev/null`);
+
+    const rawLines = stdout.trim().split('\n').filter(Boolean);
+    const logs = rawLines
+      .map(line => {
+        try { return JSON.parse(line); } catch { return null; }
+      })
+      .filter(Boolean);
+
+    // 时间过滤
+    let filtered = logs;
+    if (cutoffTime) {
+      filtered = filtered.filter(log => {
+        const t = new Date(log.time).getTime();
+        return t >= cutoffTime;
+      });
+    }
+
+    // 关键词过滤
+    if (grep) {
+      const lowerGrep = grep.toLowerCase();
+      filtered = filtered.filter(log =>
+        (log.message || '').toLowerCase().includes(lowerGrep)
+      );
+    }
+
+    // 级别过滤
+    if (priorityList.length > 0) {
+      filtered = filtered.filter(log => {
+        const levelName = (log._meta?.logLevelName || log.level || 'info').toLowerCase();
+        // 映射：WARN -> warning, ERR -> err, ERROR -> err
+        const mapped = levelName === 'warn' ? 'warning' : levelName === 'err' || levelName === 'error' ? 'err' : levelName;
+        return priorityList.includes(mapped);
+      });
+    }
+
+    // 取最后 N 条并按时间倒序
+    const recent = filtered.slice(-lines).reverse();
+
+    return recent.map(log => {
+      const levelName = (log._meta?.logLevelName || log.level || 'info').toLowerCase();
+      const mappedLevel = levelName === 'warn' ? 'warning' : levelName === 'err' || levelName === 'error' ? 'err' : levelName;
+
+      // 提取子系统名
+      let unit = 'openclaw-gateway';
+      if (log._meta?.name) {
+        try {
+          const nameObj = JSON.parse(log._meta.name);
+          if (nameObj.plugin) unit = `plugin:${nameObj.plugin}`;
+          else if (nameObj.subsystem) unit = `subsystem:${nameObj.subsystem}`;
+        } catch {
+          unit = log._meta.name;
+        }
+      }
+
+      return {
+        timestamp: log.time || new Date().toISOString(),
+        level: mappedLevel,
+        unit: unit,
+        message: log.message || '',
+        hostname: log.hostname || '',
+      };
+    });
+  } catch (err) {
+    console.error('[logger] gateway log read error:', err.message);
+    return [];
+  }
+}
+
+/**
+ * 读取 journalctl 日志（非 openclaw-gateway 服务）
  * @param {Object} options
  * @param {string} options.unit - systemd 单元名（可选）
  * @param {string} options.priority - 日志级别过滤器（可选）
@@ -45,6 +158,11 @@ async function fetchJournalLogs(options = {}) {
     lines = 200,
     grep = '',
   } = options;
+
+  // openclaw-gateway 使用专用日志文件读取
+  if (unit === 'openclaw-gateway') {
+    return fetchGatewayLogs({ priority, since, lines, grep });
+  }
 
   // 多选级别：不在 journalctl -p 过滤（不支持列表），改为 JS 层过滤
   const priorityList = priority ? priority.split(',').map(p => p.trim()).filter(Boolean) : [];
@@ -206,6 +324,7 @@ async function translateLogMessage(text) {
 
 module.exports = {
   fetchJournalLogs,
+  fetchGatewayLogs,
   fetchKeyServiceLogs,
   getLogOverview,
   translateLogMessage,
