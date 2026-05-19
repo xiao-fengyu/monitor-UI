@@ -1,5 +1,6 @@
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const fs = require('fs');
 const execAsync = promisify(exec);
 
 // 重点关注的关键服务
@@ -139,9 +140,74 @@ async function getLogOverview(since = '1 hour ago') {
   };
 }
 
+/**
+ * 翻译单条日志消息为中文
+ * 使用本地配置的 OpenAI 兼容 API
+ */
+async function translateLogMessage(text) {
+  if (!text || text.length < 5) return text;
+
+  try {
+    // 读取配置获取 API 信息
+    const configPath = '/root/.openclaw/openclaw.json';
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const provider = config.models?.providers?.openclawroot;
+    if (!provider || !provider.apiKey) {
+      return '[翻译] API 配置不可用';
+    }
+
+    const https = require('https');
+    const url = new URL(provider.baseUrl + '/chat/completions');
+
+    return new Promise((resolve, reject) => {
+      const payload = JSON.stringify({
+        model: provider.models?.[0]?.id || 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You are a helpful translator. Translate the given log message into concise Chinese. Only output the translation, no explanations.' },
+          { role: 'user', content: text.substring(0, 2000) }
+        ],
+        max_tokens: 300,
+        temperature: 0.3,
+      });
+
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${provider.apiKey}`,
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            const translation = json.choices?.[0]?.message?.content?.trim();
+            resolve(translation || text);
+          } catch {
+            resolve(text);
+          }
+        });
+      });
+
+      req.on('error', () => resolve(text));
+      req.setTimeout(10000, () => { req.destroy(); resolve(text); });
+      req.write(payload);
+      req.end();
+    });
+  } catch {
+    return text;
+  }
+}
+
 module.exports = {
   fetchJournalLogs,
   fetchKeyServiceLogs,
   getLogOverview,
+  translateLogMessage,
   KEY_SERVICES,
 };

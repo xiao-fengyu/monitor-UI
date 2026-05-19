@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Card, Table, Tag, Select, Input, Button, Space, Typography, Spin, message,
-  Form, Row, Col, DatePicker, Switch, Radio
+  Form, Row, Col, DatePicker, Radio
 } from 'antd'
 import {
   SearchOutlined, ReloadOutlined, ClockCircleOutlined,
-  FilterOutlined
+  FilterOutlined, TranslationOutlined
 } from '@ant-design/icons'
-import ReactECharts from 'echarts-for-react'
 import { logsAPI } from '../../services/api'
 import dayjs from 'dayjs'
 
@@ -96,12 +95,75 @@ function HighlightText({ text, keyword }) {
   )
 }
 
+/** 展开行：中文解释 + 翻译 + 原始消息 */
+function ExpandedRow({ record }) {
+  const explanation = getExplanation(record.message)
+  const [translation, setTranslation] = useState(null)
+  const [translating, setTranslating] = useState(false)
+
+  const handleTranslate = async () => {
+    if (translation || !record.message) return
+    setTranslating(true)
+    try {
+      const res = await logsAPI.translate(record.message)
+      setTranslation(res.data?.translation || res.data)
+    } catch (err) {
+      message.error('翻译失败：' + (err.message || '未知错误'))
+    } finally {
+      setTranslating(false)
+    }
+  }
+
+  return (
+    <div style={{ padding: '8px 16px', background: '#fafafa', borderRadius: 4 }}>
+      <div style={{ marginBottom: 8 }}>
+        <Text strong>中文解释：</Text>
+        {explanation
+          ? <Text>{explanation}</Text>
+          : <Text type="secondary">（暂无规则匹配）</Text>}
+      </div>
+
+      {!explanation && record.message && (
+        <div style={{ marginBottom: 8 }}>
+          <Text strong>AI 翻译：</Text>{' '}
+          {translating ? (
+            <Spin size="small" />
+          ) : translation ? (
+            <Text style={{ color: '#1890ff' }}>{translation}</Text>
+          ) : (
+            <Button
+              type="link" size="small" icon={<TranslationOutlined />}
+              onClick={handleTranslate} style={{ padding: 0 }}
+            >
+              点此翻译
+            </Button>
+          )}
+        </div>
+      )}
+
+      {record.message && (
+        <div>
+          <Text strong>原始消息：</Text>
+          <pre style={{
+            margin: '4px 0 0',
+            padding: 8,
+            background: '#f5f5f5',
+            borderRadius: 4,
+            fontSize: 12,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+          }}>{record.message}</pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function LogPanel() {
   const [form] = Form.useForm()
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(false)
   const [overview, setOverview] = useState(null)
-  const [trendData, setTrendData] = useState([])
   const [autoRefreshMs, setAutoRefreshMs] = useState(0)
   const [timeMode, setTimeMode] = useState('preset') // 'preset' | 'custom'
   const timerRef = useRef(null)
@@ -134,7 +196,7 @@ function LogPanel() {
       const res = await logsAPI.getLogs(params)
       setLogs(res.data?.logs || [])
 
-      // 概览数据（无筛选条件时获取全局概览）
+      // 概览数据
       try {
         const ovRes = await logsAPI.getOverview()
         setOverview(ovRes.data)
@@ -146,19 +208,9 @@ function LogPanel() {
     }
   }, [getQueryParams])
 
-  // 查询趋势
-  const fetchTrend = useCallback(async () => {
-    try {
-      const params = getQueryParams()
-      const res = await logsAPI.getTrend({ since: params.since })
-      setTrendData(res.data || [])
-    } catch { /* ignore */ }
-  }, [getQueryParams])
-
   // 首次加载
   useEffect(() => {
     fetchLogs()
-    fetchTrend()
   }, [])
 
   // 自动刷新
@@ -167,11 +219,10 @@ function LogPanel() {
     if (autoRefreshMs > 0) {
       timerRef.current = setInterval(() => {
         fetchLogs()
-        fetchTrend()
       }, autoRefreshMs)
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [autoRefreshMs, fetchLogs, fetchTrend])
+  }, [autoRefreshMs, fetchLogs])
 
   // 构建表格列
   const buildColumns = () => {
@@ -218,7 +269,7 @@ function LogPanel() {
   return (
     <div>
       <Title level={4}>📝 日志聚合</Title>
-      <Text type="secondary">采集系统日志，附带中文含义解释</Text>
+      <Text type="secondary">采集系统日志，附带中文含义解释和 AI 翻译</Text>
 
       {/* ========== 搜索区域 ========== */}
       <Card style={{ marginTop: 16 }} title={<><FilterOutlined /> 查询条件</>} size="small">
@@ -316,57 +367,6 @@ function LogPanel() {
         </Card>
       )}
 
-      {/* ========== 日志趋势图 ========== */}
-      <Card style={{ marginTop: 16 }} title="📊 日志趋势" size="small">
-        {trendData.length > 0 ? (
-          <ReactECharts
-            option={{
-              tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-              legend: {
-                data: ['ERROR', 'WARNING', 'INFO', 'DEBUG'],
-                top: 5,
-              },
-              grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-              xAxis: {
-                type: 'category',
-                data: trendData.map(d => dayjs(d.time).format('HH:mm')),
-              },
-              yAxis: { type: 'value', name: '数量' },
-              series: [
-                {
-                  name: 'ERROR',
-                  type: 'bar',
-                  stack: 'total',
-                  itemStyle: { color: '#ff4d4f' },
-                  data: trendData.map(d => d.err + d.alert + d.emerg + d.crit),
-                },
-                {
-                  name: 'WARNING',
-                  type: 'bar',
-                  stack: 'total',
-                  itemStyle: { color: '#faad14' },
-                  data: trendData.map(d => d.warning),
-                },
-                {
-                  itemStyle: { color: '#1890ff' },
-                  data: trendData.map(d => d.info + d.notice),
-                },
-                {
-                  name: 'DEBUG',
-                  type: 'bar',
-                  stack: 'total',
-                  itemStyle: { color: '#13c2c2' },
-                  data: trendData.map(d => d.debug),
-                },
-              ],
-            }}
-            style={{ height: 280 }}
-          />
-        ) : (
-          <Text type="secondary">暂无趋势数据</Text>
-        )}
-      </Card>
-
       {/* ========== 日志列表 ========== */}
       <Card style={{ marginTop: 16 }} title="📋 日志列表" size="small">
         <Spin spinning={loading}>
@@ -375,31 +375,7 @@ function LogPanel() {
             columns={buildColumns()}
             rowKey={(_, i) => i}
             expandable={{
-              expandedRowRender: (record) => {
-                const explanation = getExplanation(record.message)
-                return (
-                  <div style={{ padding: '8px 16px', background: '#fafafa', borderRadius: 4 }}>
-                    <Text strong>中文解释：</Text>
-                    {explanation
-                      ? <Text>{explanation}</Text>
-                      : <Text type="secondary">（暂无解释）</Text>}
-                    {record.message && (
-                      <div style={{ marginTop: 8 }}>
-                        <Text strong>原始消息：</Text>
-                        <pre style={{
-                          margin: '4px 0 0',
-                          padding: 8,
-                          background: '#f5f5f5',
-                          borderRadius: 4,
-                          fontSize: 12,
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-all',
-                        }}>{record.message}</pre>
-                      </div>
-                    )}
-                  </div>
-                )
-              },
+              expandedRowRender: (record) => <ExpandedRow record={record} />,
               rowExpandable: () => true,
             }}
             pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}

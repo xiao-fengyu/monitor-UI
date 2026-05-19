@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, KEY_SERVICES } = require('../utils/logger');
+const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, translateLogMessage, KEY_SERVICES } = require('../utils/logger');
 const { parseLogs } = require('../utils/logDictionary');
 
 /**
@@ -144,6 +144,23 @@ router.get('/services', (req, res) => {
     success: true,
     data: KEY_SERVICES,
   });
+});
+
+/**
+ * POST /api/logs/translate
+ * 翻译单条日志消息为中文
+ */
+router.post('/translate', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) {
+      return res.status(400).json({ success: false, error: '缺少 text 参数' });
+    }
+    const translation = await translateLogMessage(text);
+    res.json({ success: true, data: { translation } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = router;
