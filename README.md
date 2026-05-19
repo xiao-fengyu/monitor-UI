@@ -18,7 +18,7 @@
 
 ### 📝 日志聚合
 - 实时采集 systemd 日志（journalctl）
-- 中文含义解释（看不懂日志也能明白发生了什么）
+- **OpenClaw Gateway 内部应用日志**（读取 /tmp/openclaw/ 日志文件，与 `openclaw logs` 一致）
 - 表单式搜索界面：服务名 + 级别多选 + 时间范围 + 关键词
 - 支持预设时间范围和自定义日期时间范围选择器
 - 级别多选过滤（ERROR / CRIT / WARNING / INFO / DEBUG）
@@ -88,6 +88,7 @@ cd monitor-UI && node server/index.js &
 
 | 日期 | 变更内容 | 提交 |
 |------|---------|------|
+| 2026-05-19 | 🐛 修复 openclaw-gateway 日志采集不全（改读 /tmp/openclaw/ 日志文件）| 305cf90 |
 | 2026-05-19 | 🗑️ 去掉日志趋势图 + 新增 AI 翻译功能 | 81a2436 |
 | 2026-05-19 | 🔧 日志面板全面优化 — 表单式搜索、级别过滤、自定义时间、关键词高亮、展开行、自动刷新 | a7f46d7 |
 | 2026-05-19 | 修复 monitor-ops skill 注册问题 | a76dcfd |
@@ -122,4 +123,4 @@ cd monitor-UI && node server/index.js &
 
 ---
 
-*最后更新：2026-05-19 11:20*
+*最后更新：2026-05-19 11:40*
