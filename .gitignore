@@ -1,4 +1,4 @@
-# 主分支标准忽略（backup 分支会强制包含这些）
+# 标准忽略（所有分支通用）
 node_modules/
 dist/
 *.log

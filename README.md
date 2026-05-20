@@ -76,13 +76,18 @@ npm run dev:client  # 前端
 
 ### 生产部署
 ```bash
-# 克隆完整备份（含依赖）
-git clone -b backup https://github.com/xiao-fengyu/monitor-UI.git
+# 1. 克隆仓库
+git clone https://github.com/xiao-fengyu/monitor-UI.git
+cd monitor-UI
 
-# 启动后端
-cd monitor-UI && node server/index.js &
+# 2. 安装依赖 + 构建
+npm install && npm run build
 
-# 前端在 dist/ 目录，用 Nginx 指向即可
+# 3. 启动后端
+node server/index.js &
+
+# 4. 前端在 dist/ 目录，用 Nginx 指向即可
+# 详细部署见 docs/DEPLOY.md
 ```
 
 ## 📖 文档
@@ -101,6 +106,8 @@ cd monitor-UI && node server/index.js &
 
 | 日期 | 变更内容 | 提交 |
 |------|---------|------|
+| 2026-05-20 | 📦 项目归档 + 修复 backup 分支移植性（移除 32k 个 node_modules 文件）| - |
+| 2026-05-20 | 📦 补全生产部署文档（DEPLOY.md + nginx-example.conf + ai-model.json.example）| - |
 | 2026-05-19 | 🤖 新增 AI 模型前端可配置（/api/ai-config + 系统设置页面）| - |
 | 2026-05-20 | 🔍 新增单条日志锚点诊断功能（`/api/logs/diagnose` + LogDiagnoseModal 组件）| - |
 | 2026-05-19 | 🤖 新增 AI 日志智能诊断面板（/api/logs/analyze + LogAnalysis 组件）| 3b0e24a |

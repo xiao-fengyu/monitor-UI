@@ -9,20 +9,37 @@
 - systemd（用于后端进程管理）
 - Nginx（用于前端静态文件和 API 反向代理）
 
-## 快速部署
+## 部署步骤
 
-### 方式一：完整备份分支部署（推荐，无需安装依赖）
+### 1. 克隆仓库
 
 ```bash
-# 1. 克隆 backup 分支（包含 node_modules 和 dist/）
-git clone -b backup https://github.com/xiao-fengyu/monitor-UI.git
+git clone https://github.com/xiao-fengyu/monitor-UI.git
 cd monitor-UI
+```
 
-# 2. 配置 AI 模型（可选，不配置则 AI 功能降级运行）
+### 2. 安装依赖 + 构建
+
+```bash
+# 安装所有依赖（包括构建工具）
+npm install
+
+# 构建前端生产包（生成 dist/）
+npm run build
+```
+
+> 如需最小化生产依赖，可额外执行 `npm prune --production`。
+
+### 3. 配置 AI 模型（可选，不配置则 AI 功能降级运行）
+
+```bash
 cp server/config/ai-model.json.example server/config/ai-model.json
 # 编辑 server/config/ai-model.json，填入你的 API Key
+```
 
-# 3. 创建 systemd 服务
+### 4. 创建 systemd 服务
+
+```bash
 sudo tee /etc/systemd/system/monitor-ui.service << 'EOF'
 [Unit]
 Description=Monitor UI Backend
@@ -39,27 +56,22 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+```
 
-# 4. 启动
+> 注意：把 `/path/to/monitor-UI` 替换为实际路径。
+
+### 5. 启动服务
+
+```bash
 sudo systemctl daemon-reload
 sudo systemctl enable monitor-ui
 sudo systemctl start monitor-ui
 
-# 5. 验证
+# 验证
 curl http://localhost:3100/api/health
 ```
 
-### 方式二：源码部署（需 npm install）
-
-```bash
-git clone https://github.com/xiao-fengyu/monitor-UI.git
-cd monitor-UI
-npm install --production
-npm run build   # 构建前端 dist/
-# 后续步骤同方式一的 2-5
-```
-
-### Nginx 配置
+### 6. Nginx 反向代理
 
 ```bash
 # 复制示例配置
@@ -69,8 +81,7 @@ cp docs/nginx-example.conf /etc/nginx/conf.d/monitor-ui.conf
 sudo vi /etc/nginx/conf.d/monitor-ui.conf
 
 # 测试并重载
-sudo nginx -t
-sudo nginx -s reload
+sudo nginx -t && sudo nginx -s reload
 ```
 
 ## 配置 AI 模型
@@ -100,6 +111,16 @@ sudo firewall-cmd --add-service=http --permanent
 sudo firewall-cmd --reload
 ```
 
+## 更新部署
+
+```bash
+cd /path/to/monitor-UI
+git pull
+npm install        # 更新依赖
+npm run build      # 重新构建前端
+sudo systemctl restart monitor-ui
+```
+
 ## 常见问题
 
 ### Q: 页面空白 / 404
@@ -112,3 +133,7 @@ sudo firewall-cmd --reload
 
 ### Q: 日志采集为空
 确认 systemd journal 有数据：`journalctl -u openclaw-gateway --since "1 hour ago"`
+
+### Q: npm install 报错
+- 确认 Node.js 版本 >= 18：`node -v`
+- 清除缓存重试：`npm cache clean --force && npm install`
