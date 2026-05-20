@@ -10,7 +10,7 @@
 | 🚨 监控告警 | ✅ 完成 | 100% — 前端面板 + 后端 API |
 | 💾 备份管理 | ✅ 完成 | 100% — 前端面板 + 后端 API |
 
-**当前阶段**: ✅ 全部完成
+**当前阶段**: ✅ 全部完成 | 📦 已归档（2026-05-20）
 
 ---
 
@@ -87,10 +87,13 @@ cd monitor-UI && node server/index.js &
 
 ## 📖 文档
 
-- [项目计划书](./PLAN.md)
+- [项目计划书](./PLAN.md) — 已完成，存档备查
 - [日志含义大全](./docs/LOG_DICTIONARY.md)
 - [告警指南](./docs/ALERT_GUIDE.md)
 - [备份指南](./docs/BACKUP_GUIDE.md)
+- [📦 生产部署指南](./docs/DEPLOY.md) — 新服务器克隆后必看
+- [Nginx 配置示例](./docs/nginx-example.conf)
+- [AI 模型配置模板](./server/config/ai-model.json.example) — 复制后填入密钥
 
 ---
 
