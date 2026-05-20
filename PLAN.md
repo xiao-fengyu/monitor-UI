@@ -282,10 +282,30 @@ node server/index.js &
 - [x] 提交到 GitHub：`docs: complete documentation`
 
 ### Phase 8：上线与优化（第 8 步）
-- [ ] 性能优化
-- [ ] 错误边界处理
-- [ ] README.md 完善
-- [ ] 提交到 GitHub：`release: v1.0.0`
+- [x] 性能优化
+- [x] 错误边界处理
+- [x] README.md 完善
+- [x] 提交到 GitHub：`release: v1.0.0`
+
+### Phase 9：AI 日志智能诊断（第 9 步）
+- [x] 后端 `/api/logs/analyze` 接口
+- [x] 前端 AI 诊断面板组件
+- [x] 集成到日志页面顶部
+- [x] 提交到 GitHub
+
+### Phase 10：AI 模型前端可配置（第 10 步）
+- [x] 后端 `/api/ai-config` CRUD + 测试连接
+- [x] 前端系统设置页面 + AI 模型配置表单
+- [x] logger.js 改用前端配置（回退到 openclaw.json）
+- [x] `.gitignore` 排除含 Key 的配置文件
+- [ ] 提交到 GitHub
+
+#### 功能说明
+- 新增「系统设置」侧边栏入口
+- 支持配置任意 OpenAI 兼容 API（Base URL / API Key / Model）
+- 一键测试连接
+- 启用/关闭开关控制是否使用自定义配置
+- 未启用时自动回退到 openclaw.json 系统默认配置
 
 ---
 

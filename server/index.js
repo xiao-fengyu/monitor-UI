@@ -21,6 +21,10 @@ app.use('/api/logs', logRoutes);
 app.use('/api/monitor', monitorRoutes);
 app.use('/api/backup', backupRoutes);
 
+// AI 模型配置路由
+const aiConfigRoutes = require('./routes/ai-config');
+app.use('/api/ai-config', aiConfigRoutes);
+
 // 根路由
 app.get('/api/health', (req, res) => {
   res.json({

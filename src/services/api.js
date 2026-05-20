@@ -15,6 +15,12 @@ export const logsAPI = {
     api.get('/logs', { params: { all: true, lines: 50 } }).then(r => r.data),
   getTrend: (params = {}) =>
     api.get('/logs/trend', { params }).then(r => r.data),
+  translate: (text) =>
+    api.post('/logs/translate', { text }).then(r => r.data),
+  analyze: (params = {}) =>
+    api.post('/logs/analyze', params).then(r => r.data),
+  diagnose: (params = {}) =>
+    api.post('/logs/diagnose', params, { timeout: 60000 }).then(r => r.data),
 }
 
 // 监控 API
@@ -32,6 +38,13 @@ export const backupAPI = {
   getHistory: (limit = 20) =>
     api.get('/backup/history', { params: { limit } }).then(r => r.data),
   getConfig: () => api.get('/backup/config').then(r => r.data),
+}
+
+// AI 配置 API
+export const aiConfigAPI = {
+  get: () => api.get('/ai-config').then(r => r.data),
+  save: (data) => api.post('/ai-config', data).then(r => r.data),
+  test: (data) => api.post('/ai-config/test', data).then(r => r.data),
 }
 
 export default api

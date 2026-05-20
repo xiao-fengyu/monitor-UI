@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, KEY_SERVICES } = require('../utils/logger');
+const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, translateLogMessage, analyzeLogs, diagnoseLogEntry, KEY_SERVICES } = require('../utils/logger');
 const { parseLogs } = require('../utils/logDictionary');
 
 /**
@@ -144,6 +144,73 @@ router.get('/services', (req, res) => {
     success: true,
     data: KEY_SERVICES,
   });
+});
+
+/**
+ * POST /api/logs/translate
+ * 翻译单条日志消息为中文
+ */
+router.post('/translate', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) {
+      return res.status(400).json({ success: false, error: '缺少 text 参数' });
+    }
+    const translation = await translateLogMessage(text);
+    res.json({ success: true, data: { translation } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/logs/analyze
+ * AI 日志智能诊断
+ * 
+ * 参数:
+ *   unit  - 服务名（可选，不传则分析所有关键服务）
+ *   since - 时间范围（如 "1 hour ago"）
+ *   lines - 日志条数（默认 200）
+ */
+router.post('/analyze', async (req, res) => {
+  try {
+    const { unit, since, lines } = req.body;
+    const analysis = await analyzeLogs({
+      unit: unit || '',
+      since: since || '1 hour ago',
+      lines: parseInt(lines) || 200,
+    });
+    res.json({ success: true, data: analysis });
+  } catch (err) {
+    console.error('[logs/analyze] error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/logs/diagnose
+ * 单条日志锚点诊断 + 上下文关联分析
+ * 
+ * 参数:
+ *   targetLog            - 目标日志 {timestamp, level, unit, message, hostname}
+ *   contextLines         - 锚点前后各取 N 行（默认 30）
+ *   contextWindowSeconds - 时间窗口：锚点前后各 N 秒（默认 60）
+ *   sameService          - 是否只拉取同服务上下文（默认 true）
+ */
+router.post('/diagnose', async (req, res) => {
+  try {
+    const { targetLog, contextLines, contextWindowSeconds, sameService } = req.body;
+    const result = await diagnoseLogEntry({
+      targetLog,
+      contextLines: parseInt(contextLines) || 30,
+      contextWindowSeconds: parseInt(contextWindowSeconds) || 60,
+      sameService: sameService !== false,
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('[logs/diagnose] error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = router;
