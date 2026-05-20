@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, translateLogMessage, analyzeLogs, KEY_SERVICES } = require('../utils/logger');
+const { fetchJournalLogs, fetchKeyServiceLogs, getLogOverview, translateLogMessage, analyzeLogs, diagnoseLogEntry, KEY_SERVICES } = require('../utils/logger');
 const { parseLogs } = require('../utils/logDictionary');
 
 /**
@@ -183,6 +183,32 @@ router.post('/analyze', async (req, res) => {
     res.json({ success: true, data: analysis });
   } catch (err) {
     console.error('[logs/analyze] error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/logs/diagnose
+ * 单条日志锚点诊断 + 上下文关联分析
+ * 
+ * 参数:
+ *   targetLog            - 目标日志 {timestamp, level, unit, message, hostname}
+ *   contextLines         - 锚点前后各取 N 行（默认 30）
+ *   contextWindowSeconds - 时间窗口：锚点前后各 N 秒（默认 60）
+ *   sameService          - 是否只拉取同服务上下文（默认 true）
+ */
+router.post('/diagnose', async (req, res) => {
+  try {
+    const { targetLog, contextLines, contextWindowSeconds, sameService } = req.body;
+    const result = await diagnoseLogEntry({
+      targetLog,
+      contextLines: parseInt(contextLines) || 30,
+      contextWindowSeconds: parseInt(contextWindowSeconds) || 60,
+      sameService: sameService !== false,
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('[logs/diagnose] error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

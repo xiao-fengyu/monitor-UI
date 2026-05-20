@@ -10,6 +10,7 @@ import {
 import { logsAPI } from '../../services/api'
 import dayjs from 'dayjs'
 import LogAnalysis from './LogAnalysis'
+import LogDiagnoseModal from './LogDiagnoseModal'
 
 const { Title, Text } = Typography
 const { RangePicker } = DatePicker
@@ -167,6 +168,7 @@ function LogPanel() {
   const [overview, setOverview] = useState(null)
   const [autoRefreshMs, setAutoRefreshMs] = useState(0)
   const [timeMode, setTimeMode] = useState('preset') // 'preset' | 'custom'
+  const [diagnoseTarget, setDiagnoseTarget] = useState(null)
   const timerRef = useRef(null)
 
   // 从表单读取查询参数
@@ -263,6 +265,21 @@ function LogPanel() {
         key: 'message',
         ellipsis: true,
         render: (text) => <HighlightText text={text} keyword={keyword} />,
+      },
+      {
+        title: '操作',
+        key: 'action',
+        width: 80,
+        fixed: 'right',
+        render: (_, record) => (
+          <Button
+            type="link" size="small"
+            onClick={() => setDiagnoseTarget(record)}
+            style={{ padding: 0 }}
+          >
+            🔍 诊断
+          </Button>
+        ),
       },
     ]
   }
@@ -392,6 +409,13 @@ function LogPanel() {
           />
         </Spin>
       </Card>
+
+      {/* ========== AI 日志诊断模态框 ========== */}
+      <LogDiagnoseModal
+        visible={!!diagnoseTarget}
+        targetLog={diagnoseTarget}
+        onClose={() => setDiagnoseTarget(null)}
+      />
     </div>
   )
 }

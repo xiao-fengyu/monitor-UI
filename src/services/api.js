@@ -19,6 +19,8 @@ export const logsAPI = {
     api.post('/logs/translate', { text }).then(r => r.data),
   analyze: (params = {}) =>
     api.post('/logs/analyze', params).then(r => r.data),
+  diagnose: (params = {}) =>
+    api.post('/logs/diagnose', params).then(r => r.data),
 }
 
 // 监控 API

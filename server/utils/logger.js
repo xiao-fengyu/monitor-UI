@@ -538,10 +538,248 @@ ${keyMessages || '（无错误/警告日志）'}
   }
 }
 
+/**
+ * 单条日志锚点诊断 + 上下文关联分析
+ * @param {Object} options
+ * @param {Object} options.targetLog - 目标日志条目 {timestamp, level, unit, message, hostname}
+ * @param {number} options.contextLines - 锚点前后各取 N 行（默认 30）
+ * @param {number} options.contextWindowSeconds - 时间窗口：锚点前后各 N 秒（默认 60）
+ * @param {boolean} options.sameService - 是否只拉取同服务上下文（默认 true）
+ */
+async function diagnoseLogEntry(options = {}) {
+  const { targetLog, contextLines = 30, contextWindowSeconds = 60, sameService = true } = options;
+
+  if (!targetLog || !targetLog.message) {
+    throw new Error('缺少目标日志参数');
+  }
+
+  const config = getAIModelConfig();
+  if (!config) {
+    return {
+      target: { ...targetLog, explanation: '[请先在设置中配置 AI 模型]' },
+      context: { before: [], after: [], totalContextLines: 0 },
+      diagnosis: {
+        errorType: 'unknown',
+        explanation: '未配置 AI 模型，无法分析',
+        isRootCause: null,
+        rootCauseAnalysis: '请先在系统设置中配置 AI 模型',
+        evidenceChain: [],
+        severity: 'unknown',
+        recommendations: ['在系统设置 → AI 模型配置中添加有效的 API 配置'],
+      },
+    };
+  }
+
+  try {
+    // 1. 计算时间窗口
+    let cutoffBefore = null;
+    let cutoffAfter = null;
+    try {
+      const ts = new Date(targetLog.timestamp).getTime();
+      if (ts > 0) {
+        cutoffBefore = new Date(ts - contextWindowSeconds * 1000).toISOString();
+        cutoffAfter = new Date(ts + contextWindowSeconds * 1000).toISOString();
+      }
+    } catch { /* ignore */ }
+
+    // 2. 抓取上下文日志
+    const fetchOpts = {
+      unit: sameService ? (targetLog.unit || '') : '',
+      since: cutoffBefore || (sameService ? '1 hour ago' : '1 hour ago'),
+      lines: contextLines * 3, // 多取一些用于过滤
+      priority: '',
+    };
+
+    let contextLogs = [];
+    try {
+      contextLogs = await fetchJournalLogs(fetchOpts);
+    } catch { /* ignore */ }
+
+    // 3. 按时间排序，找到锚点位置，取前后文
+    contextLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    // 尝试在上下文中找到锚点日志（近似匹配）
+    let anchorIndex = -1;
+    const anchorMsg = targetLog.message.substring(0, 50).toLowerCase();
+    const anchorTime = new Date(targetLog.timestamp).getTime();
+
+    for (let i = 0; i < contextLogs.length; i++) {
+      const log = contextLogs[i];
+      const logTime = new Date(log.timestamp).getTime();
+      const timeDiff = Math.abs(logTime - anchorTime);
+      const msgMatch = log.message.substring(0, 50).toLowerCase().includes(anchorMsg) || anchorMsg.includes(log.message.substring(0, 30).toLowerCase());
+      if (timeDiff < 2000 && msgMatch) { // 2 秒内且消息相似
+        anchorIndex = i;
+        break;
+      }
+    }
+
+    // 如果没找到精确匹配，按时间找最接近的
+    if (anchorIndex === -1 && cutoffBefore) {
+      for (let i = 0; i < contextLogs.length; i++) {
+        const logTime = new Date(contextLogs[i].timestamp).getTime();
+        if (logTime >= anchorTime - 1000) {
+          anchorIndex = i;
+          break;
+        }
+      }
+    }
+
+    // 取前后文
+    const beforeStart = Math.max(0, anchorIndex - contextLines);
+    const beforeLogs = contextLogs.slice(beforeStart, anchorIndex);
+    const afterEnd = Math.min(contextLogs.length, anchorIndex + contextLines + 1);
+    const afterLogs = anchorIndex >= 0
+      ? contextLogs.slice(anchorIndex + 1, afterEnd)
+      : contextLogs.slice(0, contextLines);
+
+    // 4. 构建上下文日志文本
+    const formatLogLine = (log, isTarget = false) => {
+      const prefix = isTarget ? '>>> ' : '    ';
+      const levelTag = `[${(log.level || 'info').toUpperCase()}]`;
+      const timeStr = log.timestamp ? new Date(log.timestamp).toISOString().replace('T', ' ').slice(0, 19) : '?';
+      return `${prefix}${timeStr} ${levelTag.padEnd(8)} [${log.unit || 'unknown'}] ${log.message}`;
+    };
+
+    const contextBeforeText = beforeLogs.map(l => formatLogLine(l)).join('\n');
+    const targetText = formatLogLine(targetLog, true);
+    const contextAfterText = afterLogs.map(l => formatLogLine(l)).join('\n');
+
+    const contextText = [
+      contextBeforeText || '    （无前置上下文）',
+      targetText,
+      contextAfterText || '    （无后置上下文）',
+    ].join('\n');
+
+    // 5. 构建 AI Prompt
+    const prompt = `你是一位资深运维工程师。现在有一条报错日志，以及它的上下文日志。
+请精准诊断这条报错。
+
+【目标日志（锚点）】
+[${targetLog.level?.toUpperCase() || 'UNKNOWN'}] [${targetLog.unit || 'unknown'}] ${targetLog.timestamp || ''}
+${targetLog.message}
+
+【上下文日志（时间线，>>> 标记的是目标日志）】
+${contextText}
+
+请分析：
+1. 目标日志的字面含义（用简洁中文解释）
+2. 上下文里有哪些关键信号？（触发点、前置条件、后续影响）
+3. 这条报错是根因还是结果？为什么？
+4. 证据链：列出支持你判断的上下文日志（引用具体的时间戳和消息片段）
+5. 修复建议（具体可执行，不要说"请检查"这种废话）
+
+严格按以下 JSON 格式回复（不要加任何多余文字、不要加 markdown 代码块）：
+{
+  "errorType": "错误类型或异常名称",
+  "explanation": "中文解释这条日志的含义",
+  "isRootCause": true 或 false,
+  "rootCauseAnalysis": "根因分析。如果是结果，请说明真正的根因可能是什么；如果是根因，请说明为什么",
+  "evidenceChain": [
+    {"type": "upstream", "timestamp": "...", "message": "...", "description": "这条上下文说明了什么"}
+  ],
+  "severity": "low" 或 "medium" 或 "high" 或 "critical",
+  "recommendations": ["具体可执行建议1", "建议2"]
+}
+
+注意：
+1. isRootCause 必须是布尔值
+2. evidenceChain 至少引用 1 条上下文日志，最多 5 条
+3. severity 只能选 low/medium/high/critical 之一
+4. recommendations 要具体可操作`; 
+
+    // 6. 调用 AI
+    let content;
+    try {
+      content = await callAI({
+        config,
+        messages: [{ role: 'user', content: prompt.substring(0, 8000) }],
+        maxTokens: 2000,
+        temperature: 0.3,
+      });
+    } catch { content = ''; }
+
+    // 7. 解析结果
+    if (!content) {
+      return {
+        target: { ...targetLog, explanation: 'AI 调用失败' },
+        context: {
+          before: beforeLogs,
+          after: afterLogs,
+          totalContextLines: beforeLogs.length + afterLogs.length,
+        },
+        diagnosis: {
+          errorType: 'unknown',
+          explanation: 'AI 模型调用失败，无法分析',
+          isRootCause: null,
+          rootCauseAnalysis: '',
+          evidenceChain: [],
+          severity: 'unknown',
+          recommendations: ['检查 AI 模型配置是否正确', '检查网络连接'],
+        },
+      };
+    }
+
+    let diagnosis;
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        diagnosis = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('No JSON found');
+      }
+    } catch {
+      diagnosis = {
+        errorType: 'unknown',
+        explanation: content.substring(0, 500),
+        isRootCause: null,
+        rootCauseAnalysis: '',
+        evidenceChain: [],
+        severity: 'unknown',
+        recommendations: [],
+      };
+    }
+
+    return {
+      target: { ...targetLog, explanation: diagnosis.explanation || '' },
+      context: {
+        before: beforeLogs,
+        after: afterLogs,
+        totalContextLines: beforeLogs.length + afterLogs.length,
+      },
+      diagnosis: {
+        errorType: diagnosis.errorType || 'unknown',
+        explanation: diagnosis.explanation || '',
+        isRootCause: diagnosis.isRootCause,
+        rootCauseAnalysis: diagnosis.rootCauseAnalysis || '',
+        evidenceChain: Array.isArray(diagnosis.evidenceChain) ? diagnosis.evidenceChain : [],
+        severity: diagnosis.severity || 'unknown',
+        recommendations: Array.isArray(diagnosis.recommendations) ? diagnosis.recommendations : [],
+      },
+    };
+  } catch (err) {
+    console.error('[logger] diagnoseLogEntry error:', err.message);
+    return {
+      target: { ...targetLog },
+      context: { before: [], after: [], totalContextLines: 0 },
+      diagnosis: {
+        errorType: 'error',
+        explanation: '诊断出错: ' + err.message,
+        isRootCause: null,
+        rootCauseAnalysis: '',
+        evidenceChain: [],
+        severity: 'unknown',
+        recommendations: [],
+      },
+    };
+  }
+}
+
 module.exports = {
   fetchJournalLogs,
   fetchGatewayLogs,
   analyzeLogs,
+  diagnoseLogEntry,
   fetchKeyServiceLogs,
   getLogOverview,
   translateLogMessage,
