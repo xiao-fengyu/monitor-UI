@@ -214,7 +214,7 @@ function LogDiagnoseModal({ visible, targetLog, onClose }) {
               <Text type="secondary">AI 正在分析日志上下文...</Text>
             </div>
             <div style={{ marginTop: 8 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>正在抓取上下文日志并生成诊断报告</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>正在抓取上下文日志并生成诊断报告（最长约 60 秒）</Text>
             </div>
           </div>
         )}

@@ -20,7 +20,7 @@ export const logsAPI = {
   analyze: (params = {}) =>
     api.post('/logs/analyze', params).then(r => r.data),
   diagnose: (params = {}) =>
-    api.post('/logs/diagnose', params).then(r => r.data),
+    api.post('/logs/diagnose', params, { timeout: 60000 }).then(r => r.data),
 }
 
 // 监控 API
