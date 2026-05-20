@@ -1,0 +1,8 @@
+{
+  "provider": "示例（请修改）",
+  "baseUrl": "https://your-api-provider.com/v1",
+  "apiKey": "sk-your-api-key-here",
+  "model": "gpt-4o",
+  "enabled": false,
+  "lastUpdated": ""
+}
