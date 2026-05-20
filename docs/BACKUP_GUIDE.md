@@ -1,6 +1,6 @@
 # 💾 备份指南
 
-> 本文档解释了监控面板中的备份机制、使用方法和一键部署流程。
+> 本文档解释了监控面板中的备份机制、使用方法和部署流程。
 
 ## 备份机制概述
 
@@ -10,14 +10,39 @@
 
 | 分支 | 用途 | 包含内容 |
 |------|------|---------|
-| `main` | 源码开发 | 源代码、配置文件、文档 |
-| `backup` | 完整备份 | main 全部内容 + `node_modules` + `dist/` |
+| `main` | 源码开发 | 源代码、配置文件、文档、dist/ |
+| `backup` | 同步分支 | 与 main 保持一致（保持向后兼容） |
 
-### 为什么需要 backup 分支？
+> ⚠️ **2026-05-20 变更**：backup 分支不再包含 `node_modules`。原因是原生编译的二进制文件无法跨机器（不同 Node.js 版本/OS/CPU 架构）运行，且 3 万多个文件使 clone 速度极慢。现在统一使用 `npm install` 安装依赖。
 
-- **零配置部署**：新服务器只需 `git clone` 即可运行，无需 `npm install` 和 `npm run build`
-- **离线可用**：包含所有依赖，即使 npm 仓库不可用也能正常运行
-- **快速恢复**：服务器故障后，几分钟内即可恢复完整服务
+---
+
+## 部署方式
+
+### 标准部署（推荐）
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/xiao-fengyu/monitor-UI.git
+cd monitor-UI
+
+# 2. 安装依赖 + 构建前端
+npm install && npm run build
+
+# 3. 启动后端
+node server/index.js &
+
+# 4. 前端在 dist/ 目录，用 Nginx 指向即可
+```
+
+### 完整部署指南
+
+详见 [`docs/DEPLOY.md`](./DEPLOY.md)，包含：
+- systemd 服务配置
+- Nginx 反向代理配置（含示例文件 `nginx-example.conf`）
+- AI 模型配置
+- 防火墙设置
+- 更新部署步骤
 
 ---
 
@@ -38,68 +63,24 @@
 每次备份会包含：
 - ✅ 全部源代码（`src/`, `server/`, `docs/` 等）
 - ✅ `package.json` 和依赖配置
-- ✅ `node_modules/`（所有 npm 依赖包）
 - ✅ `dist/`（前端构建产物）
+- ❌ ~~`node_modules/`~~（已移除，改为部署时 `npm install`）
 
 ---
 
-## 一键部署流程
+## 回滚到指定版本
 
-### 前提条件
-
-- 目标服务器已安装 Node.js 和 Git
-- 能访问 GitHub（`github.com`）
-
-### 部署步骤
+如果需要回滚到某个历史版本：
 
 ```bash
-# 1. 克隆 backup 分支（包含全部依赖和构建产物）
-git clone -b backup https://github.com/xiao-fengyu/monitor-UI.git
-
-# 2. 进入项目目录
-cd monitor-UI
-
-# 3. 启动后端服务（Express，端口 3100）
-node server/index.js &
-
-# 4. 前端已在 dist/ 目录下，可通过 Nginx 或直接访问
-# Nginx 配置示例：
-# server {
-#     listen 80;
-#     location / {
-#         root /path/to/monitor-UI/dist;
-#         try_files $uri $uri/ /index.html;
-#     }
-#     location /api {
-#         proxy_pass http://localhost:3100;
-#     }
-# }
-```
-
----
-
-## 备份历史管理
-
-### 查看历史
-
-在「备份管理」页面可以查看所有备份记录，包括：
-- 提交哈希（SHA）
-- 备份时间
-- 备份类型（自动/手动）
-
-### 回滚到指定备份
-
-如果需要回滚到某个备份版本：
-
-```bash
-# 1. 切换到 backup 分支
-git checkout backup
-
-# 2. 找到目标提交
+# 1. 查看历史提交
 git log --oneline
 
-# 3. 回退到该提交
+# 2. 回退到该提交
 git reset --hard <commit-hash>
+
+# 3. 重新安装依赖 + 构建（如有依赖变更）
+npm install && npm run build
 
 # 4. 重启服务
 node server/index.js &
@@ -109,10 +90,10 @@ node server/index.js &
 
 ## 注意事项
 
-- **备份分支大小**：包含 `node_modules` 后仓库会变大（约 100-200MB），请确保网络稳定
-- **频率建议**：建议在每次重大更新后手动备份一次
-- **安全提醒**：`backup` 分支包含完整的依赖树，如果仓库是公开的，需注意依赖中是否包含敏感信息
+- **仓库大小**：移除 node_modules 后仓库约 5MB，clone 速度秒级
+- **频率建议**：建议在每次重大更新后执行一次备份/提交
+- **依赖一致性**：使用 `package-lock.json` 确保不同服务器安装相同版本的依赖
 
 ---
 
-*最后更新：2026-05-18*
+*最后更新：2026-05-20*
