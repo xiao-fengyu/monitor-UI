@@ -167,13 +167,15 @@ const LOG_PATTERNS = [
  */
 function parseLogMessage(message) {
   if (!message) return null;
+  // 防御性去除 ANSI 转义码
+  const cleanMessage = message.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 
   for (const rule of LOG_PATTERNS) {
-    if (rule.pattern.test(message)) {
+    if (rule.pattern.test(cleanMessage)) {
       return {
         category: rule.category,
         level: rule.level,
-        explanation: rule.template(message),
+        explanation: rule.template(cleanMessage),
         matched: true,
       };
     }

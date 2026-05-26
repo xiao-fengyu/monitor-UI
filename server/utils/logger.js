@@ -4,6 +4,16 @@ const fs = require('fs');
 const path = require('path');
 const execAsync = promisify(exec);
 
+/**
+ * 去除字符串中的 ANSI 转义码（颜色/样式控制字符）
+ * 例如：\x1b[90m、\x1b[39m、\x1b[1;31m 等
+ */
+function stripAnsi(str) {
+  if (typeof str !== 'string') return str;
+  // 匹配 ANSI 转义序列：ESC [ ... m
+  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+}
+
 const AI_CONFIG_PATH = path.join(__dirname, '../config/ai-model.json');
 
 /**
@@ -183,7 +193,7 @@ async function fetchGatewayLogs(options = {}) {
         timestamp: log.time || new Date().toISOString(),
         level: mappedLevel,
         unit: unit,
-        message: log.message || '',
+        message: stripAnsi(log.message || ''),
         hostname: log.hostname || '',
       };
     });
@@ -262,7 +272,7 @@ async function fetchJournalLogs(options = {}) {
         : new Date().toISOString(),
       level: LEVEL_MAP[log.PRIORITY] || 'info',
       unit: log._SYSTEMD_UNIT || 'unknown',
-      message: log.MESSAGE || '',
+      message: stripAnsi(log.MESSAGE || ''),
       hostname: log._HOSTNAME || '',
     }));
   } catch (err) {
