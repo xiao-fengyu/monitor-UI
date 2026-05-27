@@ -9,9 +9,10 @@ const execAsync = promisify(exec);
  * 例如：\x1b[90m、\x1b[39m、\x1b[1;31m 等
  */
 function stripAnsi(str) {
-  if (typeof str !== 'string') return str;
-  // 匹配 ANSI 转义序列：ESC [ ... m
-  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  if (str == null) return '';
+  // 强制转字符串（journalctl 的 MESSAGE 可能是对象/Buffer）
+  const s = typeof str === 'string' ? str : String(str);
+  return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 }
 
 const AI_CONFIG_PATH = path.join(__dirname, '../config/ai-model.json');
@@ -249,13 +250,14 @@ async function fetchJournalLogs(options = {}) {
       })
       .filter(Boolean);
 
-    // 关键词过滤
+    // 关键词过滤（防御性类型转换）
     let filtered = logs;
     if (grep) {
       const lowerGrep = grep.toLowerCase();
-      filtered = logs.filter(log =>
-        (log.MESSAGE || '').toLowerCase().includes(lowerGrep)
-      );
+      filtered = logs.filter(log => {
+        const msg = log.MESSAGE != null ? String(log.MESSAGE).toLowerCase() : '';
+        return msg.includes(lowerGrep);
+      });
     }
 
     // 级别过滤（多选支持）

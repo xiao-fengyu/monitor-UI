@@ -166,7 +166,7 @@ const LOG_PATTERNS = [
  * @returns {Object|null} 匹配结果 { category, level, explanation }
  */
 function parseLogMessage(message) {
-  if (!message) return null;
+  if (!message || typeof message !== 'string') return null;
   // 防御性去除 ANSI 转义码
   const cleanMessage = message.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 
