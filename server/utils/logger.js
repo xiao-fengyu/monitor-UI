@@ -2,24 +2,56 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const execAsync = promisify(exec);
 
+const isWindows = os.platform() === 'win32';
+
 /**
- * 去除字符串中的 ANSI 转义码（颜色/样式控制字符）
- * 例如：\x1b[90m、\x1b[39m、\x1b[1;31m 等
+ * 去除字符串中的 ANSI 转义码
  */
 function stripAnsi(str) {
   if (str == null) return '';
-  // 强制转字符串（journalctl 的 MESSAGE 可能是对象/Buffer）
   const s = typeof str === 'string' ? str : String(str);
-  return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  // 真正的 ESC 控制符: \x1b[...
+  let cleaned = s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  // 字面 ANSI 码: [93m [39m [1m [22m [2m [90m 等（无 ESC 前缀）
+  cleaned = cleaned.replace(/\[[0-9;]*[mGKHJ]/g, (match) => {
+    // 只去掉确实是 ANSI 的，避免误删正常方括号内容
+    // ANSI SGR 码范围: 0-109
+    const code = match.slice(1, -1);
+    if (/^\d+$/.test(code) && parseInt(code) <= 109) return '';
+    return match; // 保留非 ANSI 的方括号内容
+  });
+  return cleaned;
 }
 
 const AI_CONFIG_PATH = path.join(__dirname, '../config/ai-model.json');
 
 /**
+ * 获取 OpenClaw 配置文件路径
+ * 尝试多个可能的位置
+ */
+function getOpenclawConfigPath() {
+  const candidates = [
+    // Windows 常见位置
+    path.join(os.homedir(), '.openclaw', 'openclaw.json'),              // C:\Users\...\
+    'C:\\Users\\Administrator\\.openclaw\\openclaw.json',
+    'D:\\.openclaw\\openclaw.json',
+    // Linux 位置
+    '/root/.openclaw/openclaw.json',
+    '/home/*/.openclaw/openclaw.json',
+  ];
+  for (const p of candidates) {
+    if (p.includes('*')) continue; // skip globs for now
+    if (fs.existsSync(p)) return p;
+  }
+  // fallback
+  return candidates[0];
+}
+
+/**
  * 获取 AI 模型配置
- * 优先读取用户自定义配置，否则回退到 openclaw.json
  */
 function getAIModelConfig() {
   // 1. 尝试读取用户自定义配置
@@ -45,20 +77,22 @@ function getAIModelConfig() {
 
   // 2. 回退到 openclaw.json
   try {
-    const configPath = '/root/.openclaw/openclaw.json';
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const provider = config.models?.providers?.openclawroot;
-    if (provider && provider.apiKey && provider.baseUrl) {
-      const url = new URL(provider.baseUrl);
-      return {
-        hostname: url.hostname,
-        port: url.port || 443,
-        path: url.pathname.replace(/\/$/, '') + '/chat/completions',
-        protocol: url.protocol,
-        apiKey: provider.apiKey,
-        model: provider.models?.[0]?.id || 'gpt-4o-mini',
-        source: 'openclaw-fallback',
-      };
+    const configPath = getOpenclawConfigPath();
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const provider = config.models?.providers?.openclawroot;
+      if (provider && provider.apiKey && provider.baseUrl) {
+        const url = new URL(provider.baseUrl);
+        return {
+          hostname: url.hostname,
+          port: url.port || 443,
+          path: url.pathname.replace(/\/$/, '') + '/chat/completions',
+          protocol: url.protocol,
+          apiKey: provider.apiKey,
+          model: provider.models?.[0]?.id || 'gpt-4o-mini',
+          source: 'openclaw-fallback',
+        };
+      }
     }
   } catch {
     // ignore
@@ -67,8 +101,17 @@ function getAIModelConfig() {
   return null;
 }
 
-// 重点关注的关键服务
-const KEY_SERVICES = [
+// 重点关注的关键服务（Windows 服务名）
+const KEY_SERVICES = isWindows ? [
+  'openclaw-gateway',
+  'SearXNG',
+  'Docker Desktop',
+  'sshd',
+  'Redis',
+  'nginx',
+  'TaskScheduler',
+  'NlaSvc',          // 网络连接
+] : [
   'openclaw-gateway',
   'searxng',
   'memos-control-ui',
@@ -91,57 +134,95 @@ const LEVEL_MAP = {
   '7': 'debug',
 };
 
+// Windows 事件日志级别映射
+const EVENTLOG_LEVEL_MAP = {
+  'Error': 'err',
+  'Warning': 'warning',
+  'Information': 'info',
+  'Critical': 'crit',
+  'Verbose': 'debug',
+};
+
 /**
- * 读取 OpenClaw Gateway 日志文件
- * 路径：/tmp/openclaw/openclaw-YYYY-MM-DD.log（JSONL 格式）
- * 包含 journalctl 无法捕获的 Gateway 内部应用日志
+ * 获取 OpenClaw Gateway 日志
+ * Windows: 从 %TEMP%\openclaw\ 或 %APPDATA% 读取日志文件
  */
 async function fetchGatewayLogs(options = {}) {
-  const {
-    priority = '',
-    since = '1 hour ago',
-    lines = 200,
-    grep = '',
-  } = options;
-
+  const { priority = '', since = '1 hour ago', lines = 200, grep = '' } = options;
   const priorityList = priority ? priority.split(',').map(p => p.trim()).filter(Boolean) : [];
 
   try {
-    // 确定日志文件：优先当天，回退昨天
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    let logFile = `/tmp/openclaw/openclaw-${today}.log`;
-    let fallbackFile = `/tmp/openclaw/openclaw-${yesterday}.log`;
+    // Windows: 尝试多个日志目录
+    const logDirs = [
+      path.join(os.tmpdir(), 'openclaw'),           // %TEMP%\openclaw
+      path.join(os.homedir(), '.openclaw', 'logs'),  // ~/.openclaw/logs
+      'C:\\ProgramData\\openclaw\\logs',
+      'D:\\openclaw\\logs',
+    ];
 
-    if (!fs.existsSync(logFile)) {
-      logFile = fallbackFile;
+    let logFile = null;
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+    for (const dir of logDirs) {
+      if (!fs.existsSync(dir)) continue;
+      const todayFile = path.join(dir, `openclaw-${today}.log`);
+      const yesterdayFile = path.join(dir, `openclaw-${yesterday}.log`);
+      if (fs.existsSync(todayFile)) { logFile = todayFile; break; }
+      if (fs.existsSync(yesterdayFile)) { logFile = yesterdayFile; break; }
+      // 取最新的 .log 文件
+      try {
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.log')).sort().reverse();
+        if (files.length > 0) { logFile = path.join(dir, files[0]); break; }
+      } catch { /* ignore */ }
     }
 
-    if (!fs.existsSync(logFile)) {
-      console.error('[logger] gateway log file not found:', logFile);
+    if (!logFile || !fs.existsSync(logFile)) {
+      console.error('[logger] gateway log file not found in any of:', logDirs);
       return [];
     }
+    console.log('[logger] gateway log file found:', logFile);
+
+    console.log('[logger] reading gateway log from:', logFile);
 
     // 计算时间截断点
     let cutoffTime = null;
     try {
       if (since.includes('ago') || since.includes('hour') || since.includes('min') || since.includes('day')) {
-        const { stdout } = await execAsync(`date -d "${since}" +%s 2>/dev/null`);
-        cutoffTime = parseInt(stdout.trim()) * 1000;
+        // 手动解析相对时间
+        const match = since.match(/(\d+)\s*(hour|hr|minute|min|day)s?\s*ago/i);
+        if (match) {
+          const val = parseInt(match[1]);
+          const unit = match[2].toLowerCase();
+          let ms = 0;
+          if (unit.startsWith('hour')) ms = val * 3600000;
+          else if (unit.startsWith('minute') || unit === 'min') ms = val * 60000;
+          else if (unit.startsWith('day')) ms = val * 86400000;
+          cutoffTime = Date.now() - ms;
+        }
       } else {
         cutoffTime = new Date(since).getTime();
       }
     } catch { /* ignore */ }
 
-    // 读文件末尾足够多的行
-    const readBytes = Math.min(lines * 2000, 500000); // 估计每行约 2KB
-    const { stdout } = await execAsync(`tail -c ${readBytes} "${logFile}" 2>/dev/null`);
+    // 读文件末尾 — 直接用 fs 读取，避免 exec maxBuffer 溢出
+    const readBytes = Math.min(lines * 2000, 1024 * 1024); // 最多读 1MB
+    let stdout;
+    if (isWindows) {
+      const stats = fs.statSync(logFile);
+      const start = Math.max(0, stats.size - readBytes);
+      const fd = fs.openSync(logFile, 'r');
+      const buffer = Buffer.alloc(stats.size - start);
+      fs.readSync(fd, buffer, 0, buffer.length, start);
+      fs.closeSync(fd);
+      stdout = buffer.toString('utf8');
+    } else {
+      ({ stdout } = await execAsync(`tail -c ${readBytes} "${logFile}" 2>/dev/null`));
+    }
 
     const rawLines = stdout.trim().split('\n').filter(Boolean);
     const logs = rawLines
-      .map(line => {
-        try { return JSON.parse(line); } catch { return null; }
-      })
+      .map(line => { try { return JSON.parse(line); } catch { return null; } })
       .filter(Boolean);
 
     // 时间过滤
@@ -153,32 +234,31 @@ async function fetchGatewayLogs(options = {}) {
       });
     }
 
-    // 关键词过滤
+    // 关键词过滤 — 搜索 message + unit + _meta.name
     if (grep) {
       const lowerGrep = grep.toLowerCase();
-      filtered = filtered.filter(log =>
-        (log.message || '').toLowerCase().includes(lowerGrep)
-      );
+      filtered = filtered.filter(log => {
+        const msg = (log.message || '').toLowerCase();
+        const unit = (log._meta?.name || '').toLowerCase();
+        const level = (log._meta?.logLevelName || '').toLowerCase();
+        return msg.includes(lowerGrep) || unit.includes(lowerGrep) || level.includes(lowerGrep);
+      });
     }
 
     // 级别过滤
     if (priorityList.length > 0) {
       filtered = filtered.filter(log => {
         const levelName = (log._meta?.logLevelName || log.level || 'info').toLowerCase();
-        // 映射：WARN -> warning, ERR -> err, ERROR -> err
         const mapped = levelName === 'warn' ? 'warning' : levelName === 'err' || levelName === 'error' ? 'err' : levelName;
         return priorityList.includes(mapped);
       });
     }
 
-    // 取最后 N 条并按时间倒序
     const recent = filtered.slice(-lines).reverse();
-
     return recent.map(log => {
       const levelName = (log._meta?.logLevelName || log.level || 'info').toLowerCase();
       const mappedLevel = levelName === 'warn' ? 'warning' : levelName === 'err' || levelName === 'error' ? 'err' : levelName;
 
-      // 提取子系统名
       let unit = 'openclaw-gateway';
       if (log._meta?.name) {
         try {
@@ -193,9 +273,9 @@ async function fetchGatewayLogs(options = {}) {
       return {
         timestamp: log.time || new Date().toISOString(),
         level: mappedLevel,
-        unit: unit,
-        message: stripAnsi(log.message || ''),
-        hostname: log.hostname || '',
+        unit,
+        message: stripAnsi(log.message || log['1'] || ''),
+        hostname: log.hostname || os.hostname(),
       };
     });
   } catch (err) {
@@ -205,52 +285,144 @@ async function fetchGatewayLogs(options = {}) {
 }
 
 /**
- * 读取 journalctl 日志（非 openclaw-gateway 服务）
- * @param {Object} options
- * @param {string} options.unit - systemd 单元名（可选）
- * @param {string} options.priority - 日志级别过滤器（可选）
- * @param {string} options.since - 起始时间（如 '1 hour ago', '2026-05-18'）
- * @param {number} options.lines - 最大行数（默认 200）
- * @param {string} options.grep - 关键词过滤（可选）
- * @returns {Promise<Array>} 日志条目数组
+ * 读取 Windows 事件日志
+ * 替代 journalctl
+ */
+async function fetchWindowsEventLogs(options = {}) {
+  const { unit = '', priority = '', since = '1 hour ago', lines = 200, grep = '' } = options;
+
+  try {
+    // 计算时间窗口
+    let startTime;
+    const match = since.match(/(\d+)\s*(hour|hr|minute|min|day)s?\s*ago/i);
+    if (match) {
+      const val = parseInt(match[1]);
+      const u = match[2].toLowerCase();
+      let ms = 0;
+      if (u.startsWith('hour')) ms = val * 3600000;
+      else if (u.startsWith('minute') || u === 'min') ms = val * 60000;
+      else if (u.startsWith('day')) ms = val * 86400000;
+      startTime = new Date(Date.now() - ms);
+    } else {
+      startTime = new Date(since);
+    }
+
+    const afterStr = startTime.toISOString();
+
+    // 用 PowerShell 读取事件日志
+    // 如果指定了 unit，尝试映射到 Windows 事件日志名称
+    let logName = 'Application';
+    if (unit) {
+      const unitLower = unit.toLowerCase();
+      if (unitLower.includes('openclaw')) logName = 'Application'; // openclaw 写在 Application 里
+      else if (unitLower.includes('system')) logName = 'System';
+      else if (unitLower.includes('security')) logName = 'Security';
+    }
+
+    const psCmd = `
+      $after = [datetime]'${afterStr}';
+      $logs = Get-WinEvent -LogName '${logName}' -MaxEvents ${lines} -ErrorAction SilentlyContinue | Where-Object { $_.TimeCreated -ge $after };
+      $logs | ForEach-Object {
+        $entry = @{
+          TimeCreated = $_.TimeCreated.ToString('o');
+          Level = $_.LevelDisplayName;
+          ProviderName = $_.ProviderName;
+          Message = $_.Message;
+          Id = $_.Id;
+        };
+        $entry | ConvertTo-Json -Compress;
+      }
+    `.replace(/\s+/g, ' ').trim();
+
+    const { stdout } = await execAsync(`powershell -NoProfile -Command "${psCmd}"`, {
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    const rawLines = stdout.trim().split('\n').filter(Boolean);
+    const logs = rawLines
+      .map(line => { try { return JSON.parse(line); } catch { return null; } })
+      .filter(Boolean);
+
+    // 级别过滤
+    const priorityList = priority ? priority.split(',').map(p => p.trim()).filter(Boolean) : [];
+    let filtered = logs;
+
+    // 关键词过滤
+    if (grep) {
+      const lowerGrep = grep.toLowerCase();
+      filtered = filtered.filter(log =>
+        (log.Message || '').toLowerCase().includes(lowerGrep)
+      );
+    }
+
+    // 级别过滤
+    if (priorityList.length > 0) {
+      filtered = filtered.filter(log => {
+        const winLevel = EVENTLOG_LEVEL_MAP[log.Level] || 'info';
+        return priorityList.includes(winLevel);
+      });
+    }
+
+    return filtered.slice(-lines).reverse().map(log => ({
+      timestamp: log.TimeCreated || new Date().toISOString(),
+      level: EVENTLOG_LEVEL_MAP[log.Level] || 'info',
+      unit: log.ProviderName || unit || logName,
+      message: stripAnsi(log.Message || ''),
+      hostname: os.hostname(),
+    }));
+  } catch (err) {
+    console.error('[logger] Windows event log error:', err.message);
+    return [];
+  }
+}
+
+/**
+ * 读取系统日志（跨平台）
+ * Linux: journalctl
+ * Windows: Get-WinEvent (Application log) + OpenClaw gateway log files
  */
 async function fetchJournalLogs(options = {}) {
-  const {
-    unit = '',
-    priority = '',
-    since = '1 hour ago',
-    lines = 200,
-    grep = '',
-  } = options;
+  const { unit = '', priority = '', since = '1 hour ago', lines = 200, grep = '' } = options;
 
-  // openclaw-gateway 使用专用日志文件读取
+  // openclaw-gateway 专用日志文件
   if (unit === 'openclaw-gateway') {
     return fetchGatewayLogs({ priority, since, lines, grep });
   }
 
-  // 多选级别：不在 journalctl -p 过滤（不支持列表），改为 JS 层过滤
+  if (isWindows) {
+    // unit 为空时：合并 OpenClaw gateway 日志 + Windows 事件日志
+    if (!unit) {
+      try {
+        const [gatewayLogs, eventLogs] = await Promise.all([
+          fetchGatewayLogs({ priority, since, lines: Math.ceil(lines / 2), grep }),
+          fetchWindowsEventLogs({ unit: '', priority, since, lines: Math.ceil(lines / 2), grep }),
+        ]);
+        const merged = [...gatewayLogs, ...eventLogs]
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          .slice(0, lines);
+        return merged;
+      } catch {
+        // 如果合并失败，至少返回 gateway 日志
+        return fetchGatewayLogs({ priority, since, lines, grep });
+      }
+    }
+    return fetchWindowsEventLogs({ unit, priority, since, lines, grep });
+  }
+
+  // Linux: journalctl
   const priorityList = priority ? priority.split(',').map(p => p.trim()).filter(Boolean) : [];
 
   let cmd = `journalctl --no-pager --output=json --lines=${lines} --since="${since}"`;
-
-  if (unit) {
-    cmd += ` -u ${unit}`;
-  }
+  if (unit) cmd += ` -u ${unit}`;
 
   try {
     const { stdout } = await execAsync(cmd);
     const rawLines = stdout.trim().split('\n').filter(Boolean);
     const logs = rawLines
-      .map(line => {
-        try {
-          return JSON.parse(line);
-        } catch {
-          return null;
-        }
-      })
+      .map(line => { try { return JSON.parse(line); } catch { return null; } })
       .filter(Boolean);
 
-    // 关键词过滤（防御性类型转换）
     let filtered = logs;
     if (grep) {
       const lowerGrep = grep.toLowerCase();
@@ -260,7 +432,6 @@ async function fetchJournalLogs(options = {}) {
       });
     }
 
-    // 级别过滤（多选支持）
     if (priorityList.length > 0) {
       filtered = filtered.filter(log => {
         const level = LEVEL_MAP[log.PRIORITY] || 'info';
@@ -278,15 +449,13 @@ async function fetchJournalLogs(options = {}) {
       hostname: log._HOSTNAME || '',
     }));
   } catch (err) {
-    console.error('[logger] journalctl error:', err.message);
+    console.error('[logger] log fetch error:', err.message);
     return [];
   }
 }
 
 /**
- * 获取所有关键服务的最新日志（合并）
- * @param {number} lines - 每个服务的最大行数
- * @returns {Promise<Array>}
+ * 获取所有关键服务的最新日志
  */
 async function fetchKeyServiceLogs(lines = 50) {
   const allLogs = [];
@@ -294,26 +463,21 @@ async function fetchKeyServiceLogs(lines = 50) {
     try {
       const logs = await fetchJournalLogs({ unit: service, lines, since: '1 hour ago' });
       allLogs.push(...logs);
-    } catch {
-      // 服务可能不存在，跳过
-    }
+    } catch { /* skip */ }
   }
-  // 按时间排序
   allLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   return allLogs;
 }
 
 /**
- * 获取系统整体日志概览（最近 N 条各优先级数量）
+ * 获取系统整体日志概览
  */
 async function getLogOverview(since = '1 hour ago') {
   const counts = { emerg: 0, alert: 0, crit: 0, err: 0, warning: 0, notice: 0, info: 0, debug: 0 };
   const logs = await fetchJournalLogs({ lines: 500, since });
 
   logs.forEach(log => {
-    if (counts[log.level] !== undefined) {
-      counts[log.level]++;
-    }
+    if (counts[log.level] !== undefined) counts[log.level]++;
   });
 
   return {
@@ -324,7 +488,7 @@ async function getLogOverview(since = '1 hour ago') {
 }
 
 /**
- * 调用 AI 模型 API（通用）
+ * 调用 AI 模型 API
  */
 function callAI({ config, messages, maxTokens = 500, temperature = 0.3 }) {
   const https = config.protocol === 'https:' ? require('https') : require('http');
@@ -365,15 +529,12 @@ function callAI({ config, messages, maxTokens = 500, temperature = 0.3 }) {
 }
 
 /**
- * 翻译单条日志消息为中文
- * 使用可配置的 AI 模型 API
+ * 翻译单条日志消息
  */
 async function translateLogMessage(text) {
   if (!text || text.length < 5) return text;
-
   const config = getAIModelConfig();
   if (!config) return '[翻译] 请先在设置中配置 AI 模型';
-
   try {
     const content = await callAI({
       config,
@@ -392,17 +553,11 @@ async function translateLogMessage(text) {
 
 /**
  * 分析日志并生成智能诊断报告
- * 使用本地 LLM 对日志进行结构化分析
  */
 async function analyzeLogs(options = {}) {
-  const {
-    unit = '',
-    since = '1 hour ago',
-    lines = 200,
-  } = options;
+  const { unit = '', since = '1 hour ago', lines = 200 } = options;
 
   try {
-    // 获取日志（自动路由：openclaw-gateway 走文件，其他走 journalctl）
     const logs = await fetchJournalLogs({ unit, since, lines, priority: '' });
 
     if (!logs || logs.length === 0) {
@@ -416,39 +571,32 @@ async function analyzeLogs(options = {}) {
       };
     }
 
-    // 统计数据
     const levelCounts = { emerg: 0, alert: 0, crit: 0, err: 0, warning: 0, notice: 0, info: 0, debug: 0 };
     const serviceLogs = {};
 
     logs.forEach(log => {
       const lvl = (log.level || 'info').toLowerCase();
       if (levelCounts[lvl] !== undefined) levelCounts[lvl]++;
-
       const svc = log.unit || 'unknown';
       if (!serviceLogs[svc]) serviceLogs[svc] = [];
       serviceLogs[svc].push(log);
     });
 
-    // 构建分析摘要
     const errorLogs = logs.filter(l => ['emerg', 'alert', 'crit', 'err'].includes((l.level || '').toLowerCase()));
     const warningLogs = logs.filter(l => (l.level || '').toLowerCase() === 'warning');
 
-    // 提取关键消息（错误 + 警告，去重前 50 条）
     const keyMessages = [...errorLogs, ...warningLogs]
       .slice(0, 50)
       .map(l => `  [${l.level?.toUpperCase()}] [${l.unit}] ${l.message}`)
       .join('\n');
 
-    // 统计各服务状态
     const serviceStatus = Object.entries(serviceLogs).map(([name, svcLogs]) => {
       const errs = svcLogs.filter(l => ['emerg', 'alert', 'crit', 'err'].includes((l.level || '').toLowerCase())).length;
       return { name, total: svcLogs.length, errors: errs };
     });
 
-    // 读取 AI 模型配置
     const config = getAIModelConfig();
     if (!config) {
-      // 降级：返回基础统计
       return {
         health: levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
         summary: `共 ${logs.length} 条日志，错误 ${levelCounts.err + levelCounts.crit + levelCounts.alert + levelCounts.emerg} 条，警告 ${levelCounts.warning} 条。请先在设置中配置 AI 模型。`,
@@ -500,10 +648,9 @@ ${keyMessages || '（无错误/警告日志）'}
 注意：
 1. health 只能选 normal/warning/error/critical 之一
 2. issues 按严重程度排序，最多 8 个
-3. recommendations 要具体可操作，不要说"请检查"这种废话
+3. recommendations 要具体可操作
 4. trend.direction 只能选 worsening/stable/improving 之一`;
 
-    // 调用 AI 进行分析
     let content;
     try {
       content = await callAI({
@@ -512,11 +659,8 @@ ${keyMessages || '（无错误/警告日志）'}
         maxTokens: 2000,
         temperature: 0.3,
       });
-    } catch (err) {
-      content = '';
-    }
+    } catch { content = ''; }
 
-    // 解析 AI 返回结果
     if (!content) {
       return {
         health: levelCounts.err + levelCounts.crit > 0 ? 'error' : levelCounts.warning > 0 ? 'warning' : 'normal',
@@ -551,12 +695,7 @@ ${keyMessages || '（无错误/警告日志）'}
 }
 
 /**
- * 单条日志锚点诊断 + 上下文关联分析
- * @param {Object} options
- * @param {Object} options.targetLog - 目标日志条目 {timestamp, level, unit, message, hostname}
- * @param {number} options.contextLines - 锚点前后各取 N 行（默认 30）
- * @param {number} options.contextWindowSeconds - 时间窗口：锚点前后各 N 秒（默认 60）
- * @param {boolean} options.sameService - 是否只拉取同服务上下文（默认 true）
+ * 单条日志锚点诊断
  */
 async function diagnoseLogEntry(options = {}) {
   const { targetLog, contextLines = 30, contextWindowSeconds = 60, sameService = true } = options;
@@ -583,7 +722,6 @@ async function diagnoseLogEntry(options = {}) {
   }
 
   try {
-    // 1. 计算时间窗口
     let cutoffBefore = null;
     let cutoffAfter = null;
     try {
@@ -594,23 +732,18 @@ async function diagnoseLogEntry(options = {}) {
       }
     } catch { /* ignore */ }
 
-    // 2. 抓取上下文日志
     const fetchOpts = {
       unit: sameService ? (targetLog.unit || '') : '',
-      since: cutoffBefore || (sameService ? '1 hour ago' : '1 hour ago'),
-      lines: contextLines * 3, // 多取一些用于过滤
+      since: cutoffBefore || '1 hour ago',
+      lines: contextLines * 3,
       priority: '',
     };
 
     let contextLogs = [];
-    try {
-      contextLogs = await fetchJournalLogs(fetchOpts);
-    } catch { /* ignore */ }
+    try { contextLogs = await fetchJournalLogs(fetchOpts); } catch { /* ignore */ }
 
-    // 3. 按时间排序，找到锚点位置，取前后文
     contextLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-    // 尝试在上下文中找到锚点日志（近似匹配）
     let anchorIndex = -1;
     const anchorMsg = targetLog.message.substring(0, 50).toLowerCase();
     const anchorTime = new Date(targetLog.timestamp).getTime();
@@ -620,13 +753,12 @@ async function diagnoseLogEntry(options = {}) {
       const logTime = new Date(log.timestamp).getTime();
       const timeDiff = Math.abs(logTime - anchorTime);
       const msgMatch = log.message.substring(0, 50).toLowerCase().includes(anchorMsg) || anchorMsg.includes(log.message.substring(0, 30).toLowerCase());
-      if (timeDiff < 2000 && msgMatch) { // 2 秒内且消息相似
+      if (timeDiff < 2000 && msgMatch) {
         anchorIndex = i;
         break;
       }
     }
 
-    // 如果没找到精确匹配，按时间找最接近的
     if (anchorIndex === -1 && cutoffBefore) {
       for (let i = 0; i < contextLogs.length; i++) {
         const logTime = new Date(contextLogs[i].timestamp).getTime();
@@ -637,7 +769,6 @@ async function diagnoseLogEntry(options = {}) {
       }
     }
 
-    // 取前后文
     const beforeStart = Math.max(0, anchorIndex - contextLines);
     const beforeLogs = contextLogs.slice(beforeStart, anchorIndex);
     const afterEnd = Math.min(contextLogs.length, anchorIndex + contextLines + 1);
@@ -645,7 +776,6 @@ async function diagnoseLogEntry(options = {}) {
       ? contextLogs.slice(anchorIndex + 1, afterEnd)
       : contextLogs.slice(0, contextLines);
 
-    // 4. 构建上下文日志文本
     const formatLogLine = (log, isTarget = false) => {
       const prefix = isTarget ? '>>> ' : '    ';
       const levelTag = `[${(log.level || 'info').toUpperCase()}]`;
@@ -653,17 +783,12 @@ async function diagnoseLogEntry(options = {}) {
       return `${prefix}${timeStr} ${levelTag.padEnd(8)} [${log.unit || 'unknown'}] ${log.message}`;
     };
 
-    const contextBeforeText = beforeLogs.map(l => formatLogLine(l)).join('\n');
-    const targetText = formatLogLine(targetLog, true);
-    const contextAfterText = afterLogs.map(l => formatLogLine(l)).join('\n');
-
     const contextText = [
-      contextBeforeText || '    （无前置上下文）',
-      targetText,
-      contextAfterText || '    （无后置上下文）',
+      (beforeLogs.map(l => formatLogLine(l)).join('\n')) || '    （无前置上下文）',
+      formatLogLine(targetLog, true),
+      (afterLogs.map(l => formatLogLine(l)).join('\n')) || '    （无后置上下文）',
     ].join('\n');
 
-    // 5. 构建 AI Prompt
     const prompt = `你是一位资深运维工程师。现在有一条报错日志，以及它的上下文日志。
 请精准诊断这条报错。
 
@@ -675,32 +800,23 @@ ${targetLog.message}
 ${contextText}
 
 请分析：
-1. 目标日志的字面含义（用简洁中文解释）
-2. 上下文里有哪些关键信号？（触发点、前置条件、后续影响）
-3. 这条报错是根因还是结果？为什么？
-4. 证据链：列出支持你判断的上下文日志（引用具体的时间戳和消息片段）
-5. 修复建议（具体可执行，不要说"请检查"这种废话）
+1. 目标日志的字面含义
+2. 上下文里有哪些关键信号？
+3. 这条报错是根因还是结果？
+4. 证据链
+5. 修复建议
 
-严格按以下 JSON 格式回复（不要加任何多余文字、不要加 markdown 代码块）：
+严格按以下 JSON 格式回复：
 {
-  "errorType": "错误类型或异常名称",
-  "explanation": "中文解释这条日志的含义",
-  "isRootCause": true 或 false,
-  "rootCauseAnalysis": "根因分析。如果是结果，请说明真正的根因可能是什么；如果是根因，请说明为什么",
-  "evidenceChain": [
-    {"type": "upstream", "timestamp": "...", "message": "...", "description": "这条上下文说明了什么"}
-  ],
-  "severity": "low" 或 "medium" 或 "high" 或 "critical",
-  "recommendations": ["具体可执行建议1", "建议2"]
-}
+  "errorType": "错误类型",
+  "explanation": "中文解释",
+  "isRootCause": true,
+  "rootCauseAnalysis": "根因分析",
+  "evidenceChain": [{"type": "upstream", "timestamp": "...", "message": "...", "description": "..."}],
+  "severity": "low|medium|high|critical",
+  "recommendations": ["建议1", "建议2"]
+}`;
 
-注意：
-1. isRootCause 必须是布尔值
-2. evidenceChain 至少引用 1 条上下文日志，最多 5 条
-3. severity 只能选 low/medium/high/critical 之一
-4. recommendations 要具体可操作`; 
-
-    // 6. 调用 AI
     let content;
     try {
       content = await callAI({
@@ -711,23 +827,18 @@ ${contextText}
       });
     } catch { content = ''; }
 
-    // 7. 解析结果
     if (!content) {
       return {
         target: { ...targetLog, explanation: 'AI 调用失败' },
-        context: {
-          before: beforeLogs,
-          after: afterLogs,
-          totalContextLines: beforeLogs.length + afterLogs.length,
-        },
+        context: { before: beforeLogs, after: afterLogs, totalContextLines: beforeLogs.length + afterLogs.length },
         diagnosis: {
           errorType: 'unknown',
-          explanation: 'AI 模型调用失败，无法分析',
+          explanation: 'AI 模型调用失败',
           isRootCause: null,
           rootCauseAnalysis: '',
           evidenceChain: [],
           severity: 'unknown',
-          recommendations: ['检查 AI 模型配置是否正确', '检查网络连接'],
+          recommendations: ['检查 AI 模型配置'],
         },
       };
     }
@@ -735,11 +846,8 @@ ${contextText}
     let diagnosis;
     try {
       const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        diagnosis = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('No JSON found');
-      }
+      if (jsonMatch) diagnosis = JSON.parse(jsonMatch[0]);
+      else throw new Error('No JSON found');
     } catch {
       diagnosis = {
         errorType: 'unknown',
@@ -754,11 +862,7 @@ ${contextText}
 
     return {
       target: { ...targetLog, explanation: diagnosis.explanation || '' },
-      context: {
-        before: beforeLogs,
-        after: afterLogs,
-        totalContextLines: beforeLogs.length + afterLogs.length,
-      },
+      context: { before: beforeLogs, after: afterLogs, totalContextLines: beforeLogs.length + afterLogs.length },
       diagnosis: {
         errorType: diagnosis.errorType || 'unknown',
         explanation: diagnosis.explanation || '',
@@ -796,4 +900,5 @@ module.exports = {
   getLogOverview,
   translateLogMessage,
   KEY_SERVICES,
+  isWindows,
 };
